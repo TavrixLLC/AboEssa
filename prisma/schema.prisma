@@ -1,0 +1,989 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AdminRole {
+  OWNER
+  ADMIN
+  SALES_OPERATOR
+  WAREHOUSE
+  ACCOUNTANT
+  VIEWER
+}
+
+enum StaffStatus {
+  ACTIVE
+  INACTIVE
+  LOCKED
+}
+
+enum ActorType {
+  ADMIN
+  CUSTOMER
+  SCREEN
+  SYSTEM
+}
+
+enum CustomerStatus {
+  VIRTUAL
+  ACTIVE
+  BLOCKED
+}
+
+enum VerificationStatus {
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum SaleSource {
+  TIKTOK_LIVE_MANUAL
+  APP_LIVE
+  APP_FIXED_PRICE
+  APP_AUCTION
+  ADMIN_MANUAL
+}
+
+enum OrderStatus {
+  OPEN
+  SHIPPING_REQUESTED
+  PACKING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum OrderItemStatus {
+  SOLD
+  IN_CUSTOMER_BOX
+  SHIPPING_REQUESTED
+  PACKED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum LabelStatus {
+  NOT_REQUIRED
+  PENDING
+  PRINTED
+  ATTACHED
+}
+
+enum ProductListingStatus {
+  DRAFT
+  ACTIVE
+  SOLD
+  CANCELLED
+  EXPIRED
+}
+
+enum AuctionStatus {
+  DRAFT
+  ACTIVE
+  ENDED
+  CANCELLED
+}
+
+enum AuctionTier {
+  NORMAL
+  VIP
+}
+
+enum BidStatus {
+  ACTIVE
+  OUTBID
+  WINNING
+  WON
+  LOST
+  CANCELLED
+}
+
+enum LiveSessionStatus {
+  DRAFT
+  SCHEDULED
+  LIVE
+  ACTIVE
+  ENDED
+  CANCELLED
+}
+
+enum LiveSessionSource {
+  APP_LIVE
+  TIKTOK_EXTERNAL
+  MANUAL
+}
+
+enum LiveOfferType {
+  FIXED_PRICE
+  AUCTION
+}
+
+enum LiveOfferStatus {
+  ACTIVE
+  SOLD
+  ENDED
+  CANCELLED
+}
+
+enum PrintJobStatus {
+  PENDING
+  PRINTED
+  FAILED
+  CONFIRMED_ATTACHED
+}
+
+enum ShippingRequestStatus {
+  REQUESTED
+  APPROVED
+  PACKING
+  SHIPPED
+  CANCELLED
+}
+
+enum ShipmentStatus {
+  CREATED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum ScreenStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum NotificationType {
+  BID_OUTBID
+  AUCTION_ENDING_SOON
+  AUCTION_WON
+  AUCTION_LOST
+  ORDER_UPDATED
+  VERIFICATION_UPDATED
+  AD
+  SYSTEM
+}
+
+enum NotificationAudienceType {
+  ALL_ACTIVE_CUSTOMERS
+  ONE_CUSTOMER
+  SELECTED_CUSTOMERS
+  VERIFIED_CUSTOMERS
+  UNVERIFIED_CUSTOMERS
+}
+
+enum NotificationLinkType {
+  NONE
+  PRODUCT
+  AUCTION
+  CATEGORY
+}
+
+enum NotificationCampaignStatus {
+  SENT
+  PARTIAL
+  FAILED
+}
+
+enum ReferralStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+enum CommissionStatus {
+  PENDING
+  APPROVED
+  PAID
+  CANCELLED
+  REVERSED
+}
+
+enum AdPlacement {
+  STORE_HERO
+  STORE_INLINE
+  LIVE_BANNER
+  SETTINGS_PROMO
+  HOME_BANNER
+  AUCTIONS_PAGE
+  BEFORE_LIVE
+  LIVE_BOTTOM
+  IN_APP_CARD
+}
+
+enum AdTargetType {
+  ALL
+  VERIFIED
+  VIP
+  CATEGORY_INTEREST
+}
+
+enum AdLinkType {
+  NONE
+  CATEGORY
+  PRODUCT
+  AUCTION
+  LIVE
+  EXTERNAL_URL
+}
+
+model AdminUser {
+  id                 String      @id @default(cuid())
+  name               String
+  email              String      @unique
+  normalizedEmail    String      @unique
+  displayName        String?
+  phone              String?
+  jobTitle           String?
+  notes              String?
+  passwordHash       String
+  role               AdminRole   @default(VIEWER)
+  permissions        String[]    @default([])
+  deniedPermissions  String[]    @default([])
+  isActive           Boolean     @default(true)
+  status             StaffStatus @default(ACTIVE)
+  isOwner            Boolean     @default(false)
+  mustChangePassword Boolean     @default(false)
+  lastLoginAt        DateTime?
+  lastSeenAt         DateTime?
+  passwordChangedAt  DateTime?
+  deactivatedAt      DateTime?
+  deactivatedById    String?
+  tokenVersion       Int         @default(0)
+  refreshTokenHash   String?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  deactivatedBy    AdminUser?      @relation("AdminDeactivatedStaff", fields: [deactivatedById], references: [id], onDelete: SetNull)
+  deactivatedStaff AdminUser[]     @relation("AdminDeactivatedStaff")
+  roleAssignments  AdminUserRole[]
+  sessions         AdminSession[]
+
+  createdOrderItems      OrderItem[]            @relation("OrderItemCreatedBy")
+  verificationReviews    VerificationRequest[]  @relation("VerificationReviewedBy")
+  createdProductListings ProductListing[]       @relation("ProductCreatedBy")
+  createdAuctions        Auction[]              @relation("AuctionCreatedBy")
+  createdLiveSessions    LiveSession[]          @relation("LiveSessionCreatedBy")
+  createdLiveOffers      LiveOffer[]            @relation("LiveOfferCreatedBy")
+  printedPrintJobs       LabelPrintJob[]        @relation("PrintJobPrintedBy")
+  confirmedPrintJobs     LabelPrintJob[]        @relation("PrintJobConfirmedBy")
+  uploadedFiles          FileAsset[]            @relation("FileUploadedByAdmin")
+  createdAds             InAppAd[]              @relation("AdCreatedBy")
+  notificationCampaigns  NotificationCampaign[] @relation("NotificationCampaignCreatedBy")
+
+  @@index([role])
+  @@index([isActive])
+  @@index([status])
+  @@index([isOwner, status])
+}
+
+model Role {
+  id             String   @id @default(cuid())
+  name           String   @unique
+  description    String?
+  isSystem       Boolean  @default(false)
+  isActive       Boolean  @default(true)
+  permissionKeys String[] @default([])
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  staffAssignments AdminUserRole[]
+}
+
+model AdminUserRole {
+  adminUserId String
+  roleId      String
+  createdAt   DateTime @default(now())
+
+  adminUser AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  role      Role      @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@id([adminUserId, roleId])
+  @@index([roleId])
+}
+
+model AdminSession {
+  id               String    @id @default(cuid())
+  adminUserId      String
+  refreshTokenHash String
+  deviceName       String?
+  platform         String?
+  appVersion       String?
+  ipAddress        String?
+  userAgentSummary String?
+  createdAt        DateTime  @default(now())
+  lastUsedAt       DateTime  @default(now())
+  expiresAt        DateTime
+  revokedAt        DateTime?
+
+  adminUser AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+
+  @@index([adminUserId, revokedAt])
+  @@index([expiresAt])
+}
+
+model Customer {
+  id                     String             @id @default(cuid())
+  displayName            String
+  phone                  String?            @unique
+  whatsappPhone          String?
+  tiktokUsername         String?
+  status                 CustomerStatus     @default(ACTIVE)
+  verificationStatus     VerificationStatus @default(UNVERIFIED)
+  isVirtual              Boolean            @default(false)
+  purchaseLimitOverride  Decimal?           @db.Decimal(12, 2)
+  totalPurchasedAmount   Decimal            @default(0) @db.Decimal(12, 2)
+  totalCancelledAmount   Decimal            @default(0) @db.Decimal(12, 2)
+  trustLevel             String?
+  notes                  String?
+  referralCodeUsed       String?
+  referredByInfluencerId String?
+  referralExpiresAt      DateTime?
+  refreshTokenHash       String?
+  lastLoginAt            DateTime?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+
+  addresses            CustomerAddress[]
+  verificationRequests VerificationRequest[]
+  box                  CustomerBox?
+  orders               Order[]
+  orderItems           OrderItem[]
+  productPurchases     ProductListing[]              @relation("ProductSoldToCustomer")
+  wonAuctions          Auction[]                     @relation("AuctionWinner")
+  bids                 Bid[]
+  labelPrintJobs       LabelPrintJob[]
+  shipmentRequests     ShipmentRequest[]
+  shipments            Shipment[]
+  notificationSettings CustomerNotificationSettings?
+  notifications        Notification[]
+  uploadedFiles        FileAsset[]                   @relation("FileUploadedByCustomer")
+  referralAttribution  ReferralAttribution?
+  commissionEntries    CommissionLedger[]
+
+  @@index([status])
+  @@index([verificationStatus])
+  @@index([isVirtual])
+  @@index([tiktokUsername])
+  @@index([referredByInfluencerId])
+}
+
+model CustomerAddress {
+  id           String   @id @default(cuid())
+  customerId   String
+  fullName     String
+  phone        String
+  governorate  String
+  city         String
+  addressLine  String
+  nearestPoint String?
+  isDefault    Boolean  @default(false)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  customer         Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  shipmentRequests ShipmentRequest[]
+
+  @@index([customerId])
+}
+
+model VerificationRequest {
+  id                String             @id @default(cuid())
+  customerId        String
+  status            VerificationStatus @default(PENDING)
+  requestedAt       DateTime           @default(now())
+  reviewedByAdminId String?
+  reviewedAt        DateTime?
+  note              String?
+
+  customer        Customer   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  reviewedByAdmin AdminUser? @relation("VerificationReviewedBy", fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
+
+  @@index([customerId])
+  @@index([status])
+  @@index([requestedAt])
+}
+
+model Category {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  icon      String?
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orderItems      OrderItem[]
+  productListings ProductListing[]
+  auctions        Auction[]
+  liveOffers      LiveOffer[]
+  ads             InAppAd[]
+
+  @@index([isActive, sortOrder])
+}
+
+model AppSettings {
+  id                                    String   @id @default(cuid())
+  storeName                             String
+  storePhone                            String?
+  storeAddress                          String?
+  currency                              String   @default("IQD")
+  allowUnverifiedPurchase               Boolean  @default(true)
+  unverifiedPurchaseLimit               Decimal  @default(0) @db.Decimal(12, 2)
+  allowUnverifiedBidding                Boolean  @default(true)
+  unverifiedBidLimit                    Decimal? @db.Decimal(12, 2)
+  defaultAuctionExtensionSeconds        Int      @default(180)
+  defaultAuctionExtensionTriggerSeconds Int      @default(60)
+  defaultLiveAuctionResetSeconds        Int      @default(10)
+  defaultLongAuctionExtensionSeconds    Int      @default(180)
+  auctionEndingSoonNotifyMinutes        Int      @default(5)
+  maxAuctionExtensions                  Int      @default(20)
+  labelTemplate                         Json
+  shippingRequestEnabled                Boolean  @default(true)
+  createdAt                             DateTime @default(now())
+  updatedAt                             DateTime @updatedAt
+}
+
+model CustomerBox {
+  id          String    @id @default(cuid())
+  customerId  String    @unique
+  totalItems  Int       @default(0)
+  totalAmount Decimal   @default(0) @db.Decimal(12, 2)
+  lastItemAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+}
+
+model Order {
+  id                  String      @id @default(cuid())
+  customerId          String
+  status              OrderStatus @default(OPEN)
+  totalAmount         Decimal     @default(0) @db.Decimal(12, 2)
+  itemsCount          Int         @default(0)
+  shippingRequestedAt DateTime?
+  shippedAt           DateTime?
+  deliveredAt         DateTime?
+  cancelledAt         DateTime?
+  notes               String?
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  customer  Customer    @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  items     OrderItem[]
+  shipments Shipment[]
+
+  @@index([customerId, status])
+  @@index([createdAt])
+}
+
+model OrderItem {
+  id               String          @id @default(cuid())
+  orderId          String
+  customerId       String
+  categoryId       String?
+  productListingId String?
+  auctionId        String?
+  liveSessionId    String?
+  liveOfferId      String?
+  source           SaleSource
+  title            String?
+  description      String?
+  imageUrl         String?
+  snapshotUrl      String?
+  price            Decimal         @db.Decimal(12, 2)
+  quantity         Int             @default(1)
+  barcode          String          @unique
+  status           OrderItemStatus @default(IN_CUSTOMER_BOX)
+  labelStatus      LabelStatus     @default(PENDING)
+  isBroken         Boolean         @default(false)
+  isGift           Boolean         @default(false)
+  isReplacement    Boolean         @default(false)
+  soldAt           DateTime        @default(now())
+  labelPrintedAt   DateTime?
+  labelAttachedAt  DateTime?
+  cancelledAt      DateTime?
+  createdByAdminId String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  order              Order              @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  customer           Customer           @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  category           Category?          @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  productListing     ProductListing?    @relation("ProductListingItems", fields: [productListingId], references: [id], onDelete: SetNull)
+  soldProductListing ProductListing?    @relation("ProductSoldItem")
+  auction            Auction?           @relation("AuctionOrderItems", fields: [auctionId], references: [id], onDelete: SetNull)
+  soldAuction        Auction?           @relation("AuctionSoldItem")
+  liveSession        LiveSession?       @relation(fields: [liveSessionId], references: [id], onDelete: SetNull)
+  liveOffer          LiveOffer?         @relation("LiveOfferOrderItems", fields: [liveOfferId], references: [id], onDelete: SetNull)
+  soldLiveOffer      LiveOffer?         @relation("LiveOfferSoldItem")
+  createdByAdmin     AdminUser?         @relation("OrderItemCreatedBy", fields: [createdByAdminId], references: [id], onDelete: SetNull)
+  printJobs          LabelPrintJob[]
+  commissionEntries  CommissionLedger[]
+
+  @@index([customerId, status])
+  @@index([labelStatus])
+  @@index([source, soldAt])
+  @@index([categoryId])
+  @@index([createdByAdminId])
+}
+
+model ProductListing {
+  id                String               @id @default(cuid())
+  title             String
+  description       String?
+  categoryId        String
+  imageUrls         String[]             @default([])
+  price             Decimal              @db.Decimal(12, 2)
+  totalQuantity     Int                  @default(1)
+  availableQuantity Int                  @default(1)
+  soldQuantity      Int                  @default(0)
+  status            ProductListingStatus @default(DRAFT)
+  soldToCustomerId  String?
+  soldOrderItemId   String?              @unique
+  publishedAt       DateTime?
+  soldAt            DateTime?
+  createdByAdminId  String
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  category       Category    @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  soldToCustomer Customer?   @relation("ProductSoldToCustomer", fields: [soldToCustomerId], references: [id], onDelete: SetNull)
+  soldOrderItem  OrderItem?  @relation("ProductSoldItem", fields: [soldOrderItemId], references: [id], onDelete: SetNull)
+  createdByAdmin AdminUser   @relation("ProductCreatedBy", fields: [createdByAdminId], references: [id], onDelete: Restrict)
+  items          OrderItem[] @relation("ProductListingItems")
+
+  @@index([status, publishedAt])
+  @@index([status, availableQuantity])
+  @@index([categoryId])
+  @@index([createdByAdminId])
+}
+
+model Auction {
+  id                      String        @id @default(cuid())
+  title                   String
+  description             String?
+  categoryId              String
+  imageUrls               String[]      @default([])
+  startingPrice           Decimal       @db.Decimal(12, 2)
+  currentPrice            Decimal       @db.Decimal(12, 2)
+  minIncrement            Decimal       @db.Decimal(12, 2)
+  status                  AuctionStatus @default(DRAFT)
+  tier                    AuctionTier   @default(NORMAL)
+  startsAt                DateTime
+  endsAt                  DateTime
+  originalEndsAt          DateTime
+  extensionSeconds        Int
+  extensionTriggerSeconds Int
+  maxExtensions           Int
+  extensionsCount         Int           @default(0)
+  winnerCustomerId        String?
+  winningBidId            String?       @unique
+  soldOrderItemId         String?       @unique
+  createdByAdminId        String
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
+
+  category         Category    @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  winnerCustomer   Customer?   @relation("AuctionWinner", fields: [winnerCustomerId], references: [id], onDelete: SetNull)
+  winningBid       Bid?        @relation("AuctionWinningBid", fields: [winningBidId], references: [id], onDelete: SetNull)
+  soldOrderItem    OrderItem?  @relation("AuctionSoldItem", fields: [soldOrderItemId], references: [id], onDelete: SetNull)
+  createdByAdmin   AdminUser   @relation("AuctionCreatedBy", fields: [createdByAdminId], references: [id], onDelete: Restrict)
+  bids             Bid[]       @relation("AuctionBids")
+  orderItems       OrderItem[] @relation("AuctionOrderItems")
+  currentLiveOffer LiveOffer?  @relation("LiveOfferCurrentAuction")
+
+  @@index([status, startsAt, endsAt])
+  @@index([categoryId])
+  @@index([createdByAdminId])
+}
+
+model Bid {
+  id            String    @id @default(cuid())
+  auctionId     String
+  customerId    String
+  amount        Decimal   @db.Decimal(12, 2)
+  status        BidStatus @default(ACTIVE)
+  placedAt      DateTime  @default(now())
+  ipHash        String?
+  userAgentHash String?
+  createdAt     DateTime  @default(now())
+
+  auction        Auction  @relation("AuctionBids", fields: [auctionId], references: [id], onDelete: Cascade)
+  customer       Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  winningAuction Auction? @relation("AuctionWinningBid")
+
+  @@index([auctionId, status])
+  @@index([customerId, createdAt])
+}
+
+model LiveSession {
+  id               String            @id @default(cuid())
+  source           LiveSessionSource @default(MANUAL)
+  title            String
+  description      String?
+  coverImageUrl    String?
+  playbackUrl      String?
+  scheduledAt      DateTime?
+  viewerCount      Int               @default(0)
+  status           LiveSessionStatus @default(ACTIVE)
+  totalAmount      Decimal           @default(0) @db.Decimal(12, 2)
+  numberOfSales    Int               @default(0)
+  startedAt        DateTime          @default(now())
+  endedAt          DateTime?
+  createdByAdminId String
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  createdByAdmin AdminUser   @relation("LiveSessionCreatedBy", fields: [createdByAdminId], references: [id], onDelete: Restrict)
+  orderItems     OrderItem[]
+  liveOffers     LiveOffer[]
+
+  @@index([status, startedAt])
+  @@index([createdByAdminId])
+}
+
+model LiveOffer {
+  id               String          @id @default(cuid())
+  liveSessionId    String?
+  categoryId       String?
+  type             LiveOfferType
+  price            Decimal?        @db.Decimal(12, 2)
+  startingPrice    Decimal?        @db.Decimal(12, 2)
+  minIncrement     Decimal?        @db.Decimal(12, 2)
+  durationSeconds  Int?
+  status           LiveOfferStatus @default(ACTIVE)
+  imageUrl         String?
+  currentAuctionId String?         @unique
+  soldOrderItemId  String?         @unique
+  createdByAdminId String
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  liveSession    LiveSession? @relation(fields: [liveSessionId], references: [id], onDelete: SetNull)
+  category       Category?    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  currentAuction Auction?     @relation("LiveOfferCurrentAuction", fields: [currentAuctionId], references: [id], onDelete: SetNull)
+  soldOrderItem  OrderItem?   @relation("LiveOfferSoldItem", fields: [soldOrderItemId], references: [id], onDelete: SetNull)
+  createdByAdmin AdminUser    @relation("LiveOfferCreatedBy", fields: [createdByAdminId], references: [id], onDelete: Restrict)
+  orderItems     OrderItem[]  @relation("LiveOfferOrderItems")
+
+  @@index([liveSessionId, status])
+  @@index([createdByAdminId])
+}
+
+model LabelPrintJob {
+  id                 String         @id @default(cuid())
+  orderItemId        String
+  customerId         String
+  barcode            String
+  template           Json
+  printerName        String?
+  status             PrintJobStatus @default(PENDING)
+  printedByAdminId   String?
+  printedAt          DateTime?
+  confirmedByAdminId String?
+  confirmedAt        DateTime?
+  error              String?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  orderItem        OrderItem  @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  customer         Customer   @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  printedByAdmin   AdminUser? @relation("PrintJobPrintedBy", fields: [printedByAdminId], references: [id], onDelete: SetNull)
+  confirmedByAdmin AdminUser? @relation("PrintJobConfirmedBy", fields: [confirmedByAdminId], references: [id], onDelete: SetNull)
+
+  @@index([orderItemId])
+  @@index([customerId])
+  @@index([status])
+  @@index([barcode])
+}
+
+model ShipmentRequest {
+  id               String                @id @default(cuid())
+  customerId       String
+  addressId        String?
+  status           ShippingRequestStatus @default(REQUESTED)
+  requestedItemIds String[]              @default([])
+  totalAmount      Decimal               @db.Decimal(12, 2)
+  customerNote     String?
+  adminNote        String?
+  addressSnapshot  Json?
+  shippingCompany  String?
+  trackingNumber   String?
+  shippingPrice    Decimal?              @db.Decimal(12, 2)
+  approvedAt       DateTime?
+  packedAt         DateTime?
+  shippedAt        DateTime?
+  cancelledAt      DateTime?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  customer Customer         @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  address  CustomerAddress? @relation(fields: [addressId], references: [id], onDelete: SetNull)
+
+  @@index([customerId, status])
+  @@index([addressId])
+  @@index([createdAt])
+}
+
+model Shipment {
+  id              String         @id @default(cuid())
+  customerId      String
+  orderId         String?
+  itemIds         String[]       @default([])
+  shippingCompany String?
+  trackingNumber  String?
+  shippingPrice   Decimal?       @db.Decimal(12, 2)
+  status          ShipmentStatus @default(CREATED)
+  shippedAt       DateTime?
+  deliveredAt     DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  order    Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([customerId, status])
+  @@index([trackingNumber])
+}
+
+model ScreenDevice {
+  id           String       @id @default(cuid())
+  name         String
+  tokenHash    String
+  tokenVersion Int          @default(0)
+  status       ScreenStatus @default(ACTIVE)
+  isActive     Boolean      @default(true)
+  lastSeenAt   DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([status, isActive])
+}
+
+model Influencer {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String?
+  notes     String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  referralCodes        ReferralCode[]
+  referralAttributions ReferralAttribution[]
+  commissionEntries    CommissionLedger[]
+
+  @@index([isActive])
+}
+
+model ReferralCode {
+  id             String    @id @default(cuid())
+  influencerId   String
+  code           String    @unique
+  commissionRate Decimal   @db.Decimal(5, 2)
+  durationDays   Int
+  isActive       Boolean   @default(true)
+  startsAt       DateTime?
+  endsAt         DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  influencer   Influencer            @relation(fields: [influencerId], references: [id], onDelete: Restrict)
+  attributions ReferralAttribution[]
+
+  @@index([influencerId, isActive])
+}
+
+model ReferralAttribution {
+  id             String         @id @default(cuid())
+  customerId     String         @unique
+  influencerId   String
+  referralCodeId String
+  startsAt       DateTime       @default(now())
+  expiresAt      DateTime
+  status         ReferralStatus @default(ACTIVE)
+  createdAt      DateTime       @default(now())
+
+  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  influencer   Influencer   @relation(fields: [influencerId], references: [id], onDelete: Restrict)
+  referralCode ReferralCode @relation(fields: [referralCodeId], references: [id], onDelete: Restrict)
+
+  @@index([influencerId, status])
+  @@index([expiresAt])
+}
+
+model CommissionLedger {
+  id               String           @id @default(cuid())
+  influencerId     String
+  customerId       String?
+  orderItemId      String?
+  amountBase       Decimal          @db.Decimal(12, 2)
+  commissionRate   Decimal          @db.Decimal(5, 2)
+  commissionAmount Decimal          @db.Decimal(12, 2)
+  status           CommissionStatus @default(PENDING)
+  reason           String?
+  createdAt        DateTime         @default(now())
+  approvedAt       DateTime?
+  paidAt           DateTime?
+  reversedAt       DateTime?
+  cancelledAt      DateTime?
+
+  influencer Influencer @relation(fields: [influencerId], references: [id], onDelete: Restrict)
+  customer   Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  orderItem  OrderItem? @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
+
+  @@index([influencerId, status])
+  @@index([customerId])
+  @@index([orderItemId])
+}
+
+model InAppAd {
+  id               String       @id @default(cuid())
+  title            String
+  body             String
+  imageUrl         String?
+  placement        AdPlacement
+  targetType       AdTargetType @default(ALL)
+  targetCategoryId String?
+  linkType         AdLinkType   @default(NONE)
+  linkTargetId     String?
+  startsAt         DateTime
+  endsAt           DateTime
+  isActive         Boolean      @default(true)
+  priority         Int          @default(0)
+  sortOrder        Int          @default(0)
+  createdByAdminId String
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  targetCategory Category? @relation(fields: [targetCategoryId], references: [id], onDelete: SetNull)
+  createdByAdmin AdminUser @relation("AdCreatedBy", fields: [createdByAdminId], references: [id], onDelete: Restrict)
+
+  @@index([placement, isActive, startsAt, endsAt])
+  @@index([targetCategoryId])
+}
+
+model CustomerNotificationSettings {
+  id                String   @id @default(cuid())
+  customerId        String   @unique
+  auctionOutbid     Boolean  @default(true)
+  auctionEndingSoon Boolean  @default(true)
+  auctionWon        Boolean  @default(true)
+  orderUpdates      Boolean  @default(true)
+  ads               Boolean  @default(true)
+  system            Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+}
+
+model Notification {
+  id         String           @id @default(cuid())
+  customerId String?
+  campaignId String?
+  type       NotificationType
+  title      String
+  body       String
+  data       Json?
+  readAt     DateTime?
+  pushSentAt DateTime?
+  createdAt  DateTime         @default(now())
+
+  customer Customer?             @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  campaign NotificationCampaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  @@index([customerId, readAt])
+  @@index([type, createdAt])
+  @@index([campaignId])
+}
+
+model NotificationCampaign {
+  id               String                     @id @default(cuid())
+  createdByAdminId String
+  idempotencyKey   String
+  requestHash      String
+  titleAr          String
+  titleEn          String?
+  bodyAr           String
+  bodyEn           String?
+  audienceType     NotificationAudienceType
+  audienceMetadata Json?
+  linkType         NotificationLinkType       @default(NONE)
+  linkTargetId     String?
+  recipientCount   Int                        @default(0)
+  createdCount     Int                        @default(0)
+  failureCount     Int                        @default(0)
+  status           NotificationCampaignStatus @default(SENT)
+  createdAt        DateTime                   @default(now())
+
+  createdByAdmin AdminUser      @relation("NotificationCampaignCreatedBy", fields: [createdByAdminId], references: [id], onDelete: Restrict)
+  notifications  Notification[]
+
+  @@unique([createdByAdminId, idempotencyKey])
+  @@index([createdAt])
+  @@index([audienceType, status, createdAt])
+}
+
+model AuditLog {
+  id            String    @id @default(cuid())
+  actorType     ActorType
+  actorId       String?
+  action        String
+  summary       String?
+  entityType    String
+  entityId      String?
+  metadata      Json?
+  ipHash        String?
+  userAgentHash String?
+  createdAt     DateTime  @default(now())
+
+  @@index([actorType, actorId])
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model FileAsset {
+  id                   String   @id @default(cuid())
+  url                  String
+  key                  String   @unique
+  mimeType             String
+  size                 Int
+  uploadedByAdminId    String?
+  uploadedByCustomerId String?
+  createdAt            DateTime @default(now())
+
+  uploadedByAdmin    AdminUser? @relation("FileUploadedByAdmin", fields: [uploadedByAdminId], references: [id], onDelete: SetNull)
+  uploadedByCustomer Customer?  @relation("FileUploadedByCustomer", fields: [uploadedByCustomerId], references: [id], onDelete: SetNull)
+
+  @@index([uploadedByAdminId])
+  @@index([uploadedByCustomerId])
+  @@index([mimeType])
+}
+
+model IdempotencyKey {
+  id           String    @id @default(cuid())
+  key          String
+  actorType    ActorType
+  actorId      String
+  endpoint     String
+  requestHash  String
+  responseJson Json
+  statusCode   Int
+  createdAt    DateTime  @default(now())
+  expiresAt    DateTime
+
+  @@unique([key, actorType, actorId, endpoint])
+  @@index([expiresAt])
+}

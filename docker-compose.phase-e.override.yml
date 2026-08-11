@@ -1,0 +1,14 @@
+services:
+  api:
+    ports: !override
+      - "8000:3000"
+  postgres:
+    ports:
+      - "15433:5432"
+  redis:
+    ports:
+      - "16380:6379"
+  minio:
+    ports:
+      - "19002:9000"
+      - "19003:9001"

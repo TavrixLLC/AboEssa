@@ -1,0 +1,35 @@
+import * as Joi from 'joi';
+
+const ttlPattern = /^\d+[smhd]$/;
+
+export const envValidationSchema = Joi.object({
+  NODE_ENV: Joi.string().valid('development', 'test', 'production').default('development'),
+  PORT: Joi.number().port().default(3000),
+  API_PREFIX: Joi.string().default('api'),
+  DATABASE_URL: Joi.string().uri({ scheme: ['postgresql', 'postgres'] }).required(),
+  REDIS_URL: Joi.string().uri({ scheme: ['redis', 'rediss'] }).allow('').optional(),
+  JWT_ADMIN_ACCESS_SECRET: Joi.string().min(32).required(),
+  JWT_CUSTOMER_ACCESS_SECRET: Joi.string().min(32).required(),
+  JWT_SCREEN_ACCESS_SECRET: Joi.string().min(32).required(),
+  JWT_ADMIN_ACCESS_TTL: Joi.string().pattern(ttlPattern).default('15m'),
+  JWT_CUSTOMER_ACCESS_TTL: Joi.string().pattern(ttlPattern).default('15m'),
+  JWT_SCREEN_ACCESS_TTL: Joi.string().pattern(ttlPattern).default('30m'),
+  REFRESH_TOKEN_DAYS: Joi.number().integer().min(1).default(30),
+  CORS_ORIGINS: Joi.string().allow('*', '').default(''),
+  THROTTLE_TTL_MS: Joi.number().integer().min(1000).default(60000),
+  THROTTLE_LIMIT: Joi.number().integer().min(1).default(120),
+  OTP_TTL_SECONDS: Joi.number().integer().min(60).default(300),
+  OTP_COOLDOWN_SECONDS: Joi.number().integer().min(0).default(60),
+  OTP_MAX_ATTEMPTS: Joi.number().integer().min(1).default(5),
+  IDEMPOTENCY_TTL_SECONDS: Joi.number().integer().min(60).default(86400),
+  UPLOAD_MAX_BYTES: Joi.number().integer().min(1).default(5242880),
+  UPLOAD_ALLOWED_MIME: Joi.string().default('image/jpeg,image/png,image/webp'),
+  LOCAL_UPLOAD_DIR: Joi.string().default('uploads'),
+  PUBLIC_BASE_URL: Joi.string().uri().default('http://localhost:8080'),
+  MINIO_ROOT_USER: Joi.string().optional(),
+  MINIO_ROOT_PASSWORD: Joi.string().optional(),
+  MINIO_BUCKET: Joi.string().optional(),
+  SEED_ADMIN_EMAIL: Joi.string().email().optional(),
+  SEED_ADMIN_PASSWORD: Joi.string().min(8).optional(),
+  SEED_ADMIN_NAME: Joi.string().optional(),
+});
