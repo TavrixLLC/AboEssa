@@ -14,7 +14,7 @@
  *   API_BASE_URL=http://localhost:8000
  *   ADMIN_EMAIL=owner@example.com
  *   ADMIN_PASSWORD=change-me-strong
- *   CUSTOMER_ACCESS_TOKEN=... or CUSTOMER_PHONE=+9647... CUSTOMER_OTP=......
+ *   CUSTOMER_ACCESS_TOKEN=... or CUSTOMER_PHONE=+9647... CUSTOMER_PASSWORD=...
  *
  * The script also reads .env from the current working directory if present.
  */
@@ -448,7 +448,7 @@ async function main() {
         assert(res.ok, "Confirm attached failed", res.body);
     });
 
-    await step("Customer OTP login claims virtual account", async () => {
+    await step("Customer password login creates or opens an account", async () => {
         const claimed = await loginCustomer(state.customer1.phone, `Claimed ${RUN_ID}`);
         state.customer1 = { ...state.customer1, ...claimed };
         assert(state.customer1.token, "No customer token after claim");

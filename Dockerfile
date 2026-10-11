@@ -19,12 +19,15 @@ RUN npm run prisma:generate
 RUN npm run build
 
 FROM base AS runner
-COPY package*.json ./
+COPY --chown=node:node package*.json ./
 RUN npm ci --omit=dev
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/dist ./dist
-RUN mkdir -p /app/uploads && chown -R node:node /app/uploads
+COPY --from=builder --chown=node:node /app/prisma ./prisma
+COPY --from=builder --chown=node:node /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder --chown=node:node /app/dist ./dist
+COPY --chown=node:node docker/api/production-entrypoint.sh ./docker/api/production-entrypoint.sh
+RUN chmod 0555 /app/docker/api/production-entrypoint.sh \
+  && mkdir -p /app/uploads \
+  && chown -R node:node /app/uploads
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD node -e "require('http').get('http://127.0.0.1:3000/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"

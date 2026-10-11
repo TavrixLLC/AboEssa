@@ -19,6 +19,7 @@ import { WarehouseService } from 'src/warehouse/warehouse.service';
 const auditLogs = () => ({ create: jest.fn().mockResolvedValue({}) });
 const sockets = () => ({
   emitSale: jest.fn(),
+  emitQuickSaleDisplayUpdated: jest.fn(),
   emitLabelJobUpdated: jest.fn(),
   emitSessionUpdated: jest.fn(),
   emitSessionEnded: jest.fn(),
@@ -27,7 +28,15 @@ const sockets = () => ({
 const request = { ip: '127.0.0.1', headers: { 'user-agent': 'jest' } } as any;
 
 describe('SalesService', () => {
-  function makeSalesHarness(options: { blocked?: boolean; limit?: number; verified?: boolean } = {}) {
+  function makeSalesHarness(
+    options: {
+      blocked?: boolean;
+      limit?: number;
+      verified?: boolean;
+      allowUnverifiedPurchase?: boolean;
+      displayName?: string;
+    } = {},
+  ) {
     let barcodeIndex = 0;
     const order = {
       id: 'order-1',
@@ -45,12 +54,14 @@ describe('SalesService', () => {
     };
     const customer = {
       id: 'customer-1',
-      displayName: 'Ahmed',
+      displayName: options.displayName ?? 'Ahmed',
       phone: '+9647700000000',
       whatsappPhone: '+9647700000000',
       tiktokUsername: null,
       status: options.blocked ? CustomerStatus.BLOCKED : CustomerStatus.ACTIVE,
-      verificationStatus: options.verified ? VerificationStatus.VERIFIED : VerificationStatus.UNVERIFIED,
+      verificationStatus: options.verified
+        ? VerificationStatus.VERIFIED
+        : VerificationStatus.UNVERIFIED,
       isVirtual: false,
       purchaseLimitOverride: null,
       totalPurchasedAmount: new Prisma.Decimal(0),
@@ -73,7 +84,7 @@ describe('SalesService', () => {
           id: 'app_settings_singleton',
           storeName: 'Abo Essa Store',
           currency: 'IQD',
-          allowUnverifiedPurchase: true,
+          allowUnverifiedPurchase: options.allowUnverifiedPurchase ?? true,
           unverifiedPurchaseLimit: new Prisma.Decimal(options.limit ?? 100000),
           labelTemplate: {},
         }),
@@ -121,6 +132,9 @@ describe('SalesService', () => {
         }),
       },
       commissionLedger: { create: jest.fn() },
+      quickSaleDisplayRecord: {
+        create: jest.fn().mockResolvedValue({ id: 'display-sale-1' }),
+      },
     };
     const prisma = {
       $transaction: jest.fn().mockImplementation((callback) => callback(tx)),
@@ -170,8 +184,14 @@ describe('SalesService', () => {
       ),
     };
 
-    const service = new SalesService(prisma as any, labels as any, auditLogs() as any, sockets() as any);
-    return { service, tx, labels };
+    const socketEvents = sockets();
+    const service = new SalesService(
+      prisma as any,
+      labels as any,
+      auditLogs() as any,
+      socketEvents as any,
+    );
+    return { service, tx, labels, socketEvents };
   }
 
   it('creates one sold item, updates totals, and creates a print job when requested', async () => {
@@ -228,15 +248,15 @@ describe('SalesService', () => {
     ).rejects.toMatchObject({ code: 'CUSTOMER_BLOCKED' });
   });
 
-  it('blocks unverified paid purchases when limit is zero', async () => {
-    const { service } = makeSalesHarness({ limit: 0 });
+  it('allows active unverified customers to purchase despite legacy verification limits', async () => {
+    const { service } = makeSalesHarness({ limit: 0, allowUnverifiedPurchase: false });
 
-    await expect(
-      service.createSoldItem(
-        { customerId: 'customer-1', source: SaleSource.ADMIN_MANUAL, price: 3000 },
-        { actorType: ActorType.ADMIN },
-      ),
-    ).rejects.toMatchObject({ code: 'CUSTOMER_NOT_VERIFIED' });
+    const result = await service.createSoldItem(
+      { customerId: 'customer-1', source: SaleSource.ADMIN_MANUAL, price: 3000 },
+      { actorType: ActorType.ADMIN },
+    );
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].price.toString()).toBe('3000');
   });
 
   it('allows gifts with price zero', async () => {
@@ -248,6 +268,68 @@ describe('SalesService', () => {
     );
 
     expect(result.items[0].price.toString()).toBe('0');
+  });
+
+  it('persists and emits a safe display refresh after a successful manual-name Quick Sale', async () => {
+    const { service, tx, socketEvents } = makeSalesHarness({
+      displayName: 'Ali',
+      limit: 500000,
+    });
+
+    await service.createSoldItem(
+      {
+        customerId: 'customer-1',
+        source: SaleSource.ADMIN_MANUAL,
+        price: 250000,
+        isQuickSale: true,
+      },
+      { actorType: ActorType.ADMIN, actorId: 'admin-1' },
+    );
+
+    expect(tx.quickSaleDisplayRecord.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          customerDisplayName: 'Ali',
+          amount: expect.any(Prisma.Decimal),
+          currency: 'IQD',
+        }),
+      }),
+    );
+    expect(socketEvents.emitQuickSaleDisplayUpdated).toHaveBeenCalledWith('display-sale-1');
+  });
+
+  it('uses the existing Customer display name in the Quick Sale display record', async () => {
+    const { service, tx } = makeSalesHarness({ displayName: 'Ahmed' });
+    await service.createSoldItem(
+      {
+        customerId: 'customer-1',
+        source: SaleSource.ADMIN_MANUAL,
+        price: 12000,
+        isQuickSale: true,
+      },
+      { actorType: ActorType.ADMIN, actorId: 'admin-1' },
+    );
+    expect(tx.quickSaleDisplayRecord.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ customerDisplayName: 'Ahmed' }),
+      }),
+    );
+  });
+
+  it('does not emit a display refresh when Quick Sale persistence fails', async () => {
+    const { service, socketEvents } = makeSalesHarness({ blocked: true });
+    await expect(
+      service.createSoldItem(
+        {
+          customerId: 'customer-1',
+          source: SaleSource.ADMIN_MANUAL,
+          price: 12000,
+          isQuickSale: true,
+        },
+        { actorType: ActorType.ADMIN, actorId: 'admin-1' },
+      ),
+    ).rejects.toMatchObject({ code: 'CUSTOMER_BLOCKED' });
+    expect(socketEvents.emitQuickSaleDisplayUpdated).not.toHaveBeenCalled();
   });
 });
 
@@ -279,7 +361,12 @@ describe('LabelsService', () => {
       isBroken: false,
       isGift: false,
       isReplacement: false,
-      customer: { id: 'customer-1', displayName: 'Ahmed', phone: '+9647700000000', whatsappPhone: null },
+      customer: {
+        id: 'customer-1',
+        displayName: 'Ahmed',
+        phone: '+9647700000000',
+        whatsappPhone: null,
+      },
       category: { id: 'cat-1', name: 'Clothes' },
     };
     const tx = {
@@ -323,10 +410,14 @@ describe('LabelsService', () => {
     await service.markPrinted('job-1', 'admin-1');
 
     expect(tx.labelPrintJob.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: PrintJobStatus.PRINTED }) }),
+      expect.objectContaining({
+        data: expect.objectContaining({ status: PrintJobStatus.PRINTED }),
+      }),
     );
     expect(tx.orderItem.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ labelStatus: LabelStatus.PRINTED }) }),
+      expect.objectContaining({
+        data: expect.objectContaining({ labelStatus: LabelStatus.PRINTED }),
+      }),
     );
   });
 
@@ -336,10 +427,14 @@ describe('LabelsService', () => {
     await service.confirmAttached('job-1', 'admin-1');
 
     expect(tx.labelPrintJob.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: PrintJobStatus.CONFIRMED_ATTACHED }) }),
+      expect.objectContaining({
+        data: expect.objectContaining({ status: PrintJobStatus.CONFIRMED_ATTACHED }),
+      }),
     );
     expect(tx.orderItem.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ labelStatus: LabelStatus.ATTACHED }) }),
+      expect.objectContaining({
+        data: expect.objectContaining({ labelStatus: LabelStatus.ATTACHED }),
+      }),
     );
   });
 });
@@ -368,7 +463,9 @@ describe('SalesSessionsService', () => {
   it('ends an active session', async () => {
     const prisma = {
       liveSession: {
-        findUnique: jest.fn().mockResolvedValue({ id: 'session-1', status: LiveSessionStatus.ACTIVE }),
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ id: 'session-1', status: LiveSessionStatus.ACTIVE }),
         update: jest.fn().mockResolvedValue({ id: 'session-1', status: LiveSessionStatus.ENDED }),
       },
     };
@@ -382,7 +479,9 @@ describe('SalesSessionsService', () => {
   it('prevents ending an already ended session', async () => {
     const prisma = {
       liveSession: {
-        findUnique: jest.fn().mockResolvedValue({ id: 'session-1', status: LiveSessionStatus.ENDED }),
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ id: 'session-1', status: LiveSessionStatus.ENDED }),
       },
     };
     const service = new SalesSessionsService(prisma as any, auditLogs() as any, sockets() as any);
@@ -430,7 +529,9 @@ describe('WarehouseService', () => {
     const labels = { confirmAttachedByItem: jest.fn().mockResolvedValue({ id: 'job-1' }) };
     const prisma = {
       orderItem: {
-        findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 'item-1', labelStatus: LabelStatus.ATTACHED }),
+        findUniqueOrThrow: jest
+          .fn()
+          .mockResolvedValue({ id: 'item-1', labelStatus: LabelStatus.ATTACHED }),
       },
     };
     const service = new WarehouseService(prisma as any, labels as any, auditLogs() as any);

@@ -17,6 +17,7 @@ import { CustomerAddressesModule } from 'src/customer-addresses/customer-address
 import { CustomersModule } from 'src/customers/customers.module';
 import { HealthModule } from 'src/health/health.module';
 import { InfluencersModule } from 'src/influencers/influencers.module';
+import { StorageModule } from 'src/files/storage.module';
 import { LabelsModule } from 'src/labels/labels.module';
 import { MarketplaceModule } from 'src/marketplace/marketplace.module';
 import { NotificationsModule } from 'src/notifications/notifications.module';
@@ -35,6 +36,7 @@ import { TimeModule } from 'src/time/time.module';
 import { UploadsModule } from 'src/uploads/uploads.module';
 import { VerificationModule } from 'src/verification/verification.module';
 import { WarehouseModule } from 'src/warehouse/warehouse.module';
+import { WalletModule } from 'src/wallet/wallet.module';
 
 @Module({
   imports: [
@@ -87,10 +89,12 @@ import { WarehouseModule } from 'src/warehouse/warehouse.module';
     MarketplaceModule,
     UploadsModule,
     InfluencersModule,
+    StorageModule,
     AdsModule,
     ShippingModule,
     ReportsModule,
     WarehouseModule,
+    WalletModule,
     OrdersModule,
     ScreensModule,
   ],

@@ -4,6 +4,13 @@ coverage
 .env
 .env.*
 !.env.example
-uploads
+/uploads
+/backups
 *.log
 .DS_Store
+*.pem
+*.key
+*.p12
+*.pfx
+firebase-admin*.json
+*service-account*.json

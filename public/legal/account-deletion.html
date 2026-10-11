@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>حذف حساب شناشيل</title>
+  <link rel="stylesheet" href="/legal/legal.css">
+  <script src="/legal/account-deletion.js" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <div class="brand">شناشيل · Shanashil</div>
+    <h1>حذف الحساب</h1>
+    <p class="lede">يمكنك حذف حساب تطبيق شناشيل وبياناته من هنا حتى لو لم يعد التطبيق مثبتاً على جهازك.</p>
+    <div class="notice danger">
+      <strong>الحذف نهائي ولا يمكن التراجع عنه.</strong>
+      ستُحذف بيانات الهوية والدخول والعناوين والأجهزة والإشعارات. قد تبقى سجلات معاملات مجهولة فقط عند الحاجة للمحاسبة أو الأمان أو منع الاحتيال، كما هو موضح في <a href="/privacy">سياسة الخصوصية</a>.
+    </div>
+
+    <form id="deletion-form" novalidate>
+      <label for="phone">رقم الهاتف المرتبط بالحساب</label>
+      <input id="phone" name="phone" type="tel" autocomplete="tel" inputmode="tel" minlength="8" maxlength="32" required placeholder="+9647700000000">
+
+      <label for="password">كلمة المرور</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" minlength="10" maxlength="128" required>
+
+      <button id="submit-button" type="submit">حذف حسابي وبياناتي نهائياً</button>
+      <p id="form-status" class="status" role="status" aria-live="polite"></p>
+    </form>
+
+    <hr>
+    <section lang="en" dir="ltr">
+      <h2>Delete your Shanashil account</h2>
+      <p>Enter the phone number and password used for your Shanashil Customer account. Deletion is immediate and irreversible. Identity, credentials, addresses, devices, and notifications are erased. Only anonymized records needed for accounting, security, dispute handling, fraud prevention, or applicable law may be retained.</p>
+    </section>
+    <p class="footer">Tavrix LLC · <a href="/privacy">سياسة الخصوصية / Privacy policy</a></p>
+  </main>
+</body>
+</html>

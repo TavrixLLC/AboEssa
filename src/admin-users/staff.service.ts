@@ -190,6 +190,7 @@ export class StaffService {
       return created;
     });
     await this.auditLogs.create({ actorType: ActorType.ADMIN, actorId, action: 'STAFF_CREATED', entityType: 'AdminUser', entityId: admin.id, metadata: { email, displayName: dto.displayName, roleIds }, ip: requestIp(request), userAgent: requestAgent(request) });
+    this.sockets.emitToAdmins('staff_updated', { staffId: admin.id, change: 'created' });
     return this.findOne(admin.id);
   }
 
@@ -207,6 +208,7 @@ export class StaffService {
     };
     const admin = await this.prisma.adminUser.update({ where: { id }, data, include: { roleAssignments: { include: { role: true } } } });
     await this.auditLogs.create({ actorType: ActorType.ADMIN, actorId, action: 'STAFF_UPDATED', entityType: 'AdminUser', entityId: id, metadata: { before: { displayName: previous.displayName ?? previous.name, email: previous.email, phone: previous.phone, jobTitle: previous.jobTitle }, after: { displayName: admin.displayName ?? admin.name, email: admin.email, phone: admin.phone, jobTitle: admin.jobTitle } }, ip: requestIp(request), userAgent: requestAgent(request) });
+    this.sockets.emitToAdmins('staff_updated', { staffId: id, change: 'profile' });
     return this.findOne(id);
   }
 

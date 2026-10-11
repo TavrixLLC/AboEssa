@@ -3,6 +3,7 @@ import {
   ActorType,
   AuctionStatus,
   BidStatus,
+  CheckoutPaymentMethod,
   CustomerStatus,
   LabelStatus,
   NotificationType,
@@ -11,8 +12,6 @@ import {
   SaleSource,
   VerificationStatus,
 } from '@prisma/client';
-import { rm } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { IdempotencyService } from 'src/common/idempotency/idempotency.service';
 import { PERMISSIONS_CATALOG } from 'src/permissions/permissions.catalog';
 import { ProductsService } from 'src/products/products.service';
@@ -25,6 +24,16 @@ import { MarketplaceService } from 'src/marketplace/marketplace.service';
 
 const request = { ip: '127.0.0.1', headers: { 'user-agent': 'jest' } } as any;
 const auditLogs = () => ({ create: jest.fn().mockResolvedValue({}) });
+const checkoutDto = {
+  paymentMethod: CheckoutPaymentMethod.WALLET,
+  delivery: {
+    fullName: 'Test Customer',
+    phone: '07738006852',
+    governorate: 'Baghdad',
+    city: 'Baghdad',
+    addressLine: 'Test address',
+  },
+};
 
 function category() {
   return { id: 'cat-1', name: 'Electronics', isActive: true };
@@ -216,6 +225,15 @@ describe('ProductsService mobile contract', () => {
             }),
           ),
         ),
+        update: jest.fn().mockImplementation(({ data }) =>
+          Promise.resolve(
+            product({
+              ...data,
+              imageUrls: data.imageUrls ?? product().imageUrls,
+              category: category(),
+            }),
+          ),
+        ),
         findUniqueOrThrow: jest.fn().mockResolvedValue(
           product({
             status: ProductListingStatus.SOLD,
@@ -242,14 +260,24 @@ describe('ProductsService mobile contract', () => {
     };
     const sockets = { emitToAdmins: jest.fn(), emitToCustomers: jest.fn() };
     const notifications = { createForCustomer: jest.fn().mockResolvedValue({}) };
+    const checkout = {
+      complete: jest.fn().mockImplementation((_tx, input) =>
+        Promise.resolve({
+          walletPaid: input.totalAmount,
+          cashDue: new Prisma.Decimal(0),
+          shipmentRequest: { id: 'shipment-1' },
+        }),
+      ),
+    };
     const service = new ProductsService(
       prisma as any,
       sales as any,
       auditLogs() as any,
       sockets as any,
       notifications as any,
+      checkout as any,
     );
-    return { service, sockets };
+    return { service, sockets, prisma, checkout };
   }
 
   it('maps products to stable mobile-safe fields', () => {
@@ -309,6 +337,51 @@ describe('ProductsService mobile contract', () => {
     });
   });
 
+  it('product creation persists the canonical media reference', async () => {
+    const { service, prisma } = makeService();
+    const imageUrl = '/api/media/products/product.jpg';
+
+    const result = await service.create(
+      {
+        title: 'Product with image',
+        categoryId: 'cat-1',
+        price: 5000,
+        imageUrls: [imageUrl],
+      },
+      'admin-1',
+      request,
+    );
+
+    expect(result.imageUrls).toEqual([imageUrl]);
+    expect(prisma.productListing.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ imageUrls: [imageUrl] }),
+      }),
+    );
+  });
+
+  it('product update persists a replacement media reference', async () => {
+    const { service, prisma } = makeService();
+    const imageUrl = '/api/media/products/replacement.webp';
+    prisma.productListing.update.mockImplementation(({ data }) =>
+      Promise.resolve(
+        product({
+          imageUrls: data.imageUrls ?? product().imageUrls,
+          category: category(),
+        }),
+      ),
+    );
+
+    const result = await service.update('product-1', { imageUrls: [imageUrl] }, 'admin-1', request);
+
+    expect(result.imageUrls).toEqual([imageUrl]);
+    expect(prisma.productListing.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ imageUrls: [imageUrl] }),
+      }),
+    );
+  });
+
   it('product quantity zero is rejected with stable code', async () => {
     const { service } = makeService();
 
@@ -351,7 +424,7 @@ describe('ProductsService mobile contract', () => {
   it('buy product returns stable purchase result and emits realtime update', async () => {
     const { service, sockets } = makeService();
 
-    const result = await service.buy('product-1', 'customer-1', request);
+    const result = await service.buy('product-1', 'customer-1', request, checkoutDto);
 
     expect(result).toMatchObject({
       productId: 'product-1',
@@ -362,7 +435,7 @@ describe('ProductsService mobile contract', () => {
       requestedQuantity: 1,
       purchasedQuantity: 1,
       remainingQuantity: 2,
-      status: 'PURCHASED',
+      status: 'AWAITING_FULFILLMENT',
     });
     expect(sockets.emitToAdmins).toHaveBeenCalledWith(
       'product_sold',
@@ -375,9 +448,12 @@ describe('ProductsService mobile contract', () => {
   });
 
   it('quantity buy decrements stock and returns all physical order items', async () => {
-    const { service } = makeService();
+    const { service, checkout } = makeService();
 
-    const result = await service.buy('product-1', 'customer-1', request, { quantity: 2 });
+    const result = await service.buy('product-1', 'customer-1', request, {
+      ...checkoutDto,
+      quantity: 2,
+    });
 
     expect(result).toMatchObject({
       requestedQuantity: 2,
@@ -387,13 +463,20 @@ describe('ProductsService mobile contract', () => {
       totalPrice: '30000.00',
     });
     expect(result.orderItems).toHaveLength(2);
+    expect(checkout.complete).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        totalAmount: new Prisma.Decimal('30000'),
+        paymentMethod: CheckoutPaymentMethod.WALLET,
+      }),
+    );
   });
 
   it('insufficient product stock returns stable quantity conflict', async () => {
     const { service } = makeService();
 
     await expect(
-      service.buy('product-1', 'customer-1', request, { quantity: 4 }),
+      service.buy('product-1', 'customer-1', request, { ...checkoutDto, quantity: 4 }),
     ).rejects.toMatchObject({
       code: 'INSUFFICIENT_PRODUCT_STOCK',
     });
@@ -403,13 +486,13 @@ describe('ProductsService mobile contract', () => {
     const { service } = makeService({ claimCount: 0 });
 
     await expect(
-      service.buy('product-1', 'customer-1', request, { quantity: 2 }),
+      service.buy('product-1', 'customer-1', request, { ...checkoutDto, quantity: 2 }),
     ).rejects.toMatchObject({
       code: 'INSUFFICIENT_PRODUCT_STOCK',
     });
   });
 
-  it('serializable transaction conflicts map to stock conflict', async () => {
+  it('serializable transaction conflicts request a retry without falsely reporting stock', async () => {
     const { service } = makeService({
       transactionError: new Prisma.PrismaClientKnownRequestError(
         'Serializable transaction failed',
@@ -420,8 +503,10 @@ describe('ProductsService mobile contract', () => {
       ),
     });
 
-    await expect(service.buy('product-1', 'customer-1', request)).rejects.toMatchObject({
-      code: 'INSUFFICIENT_PRODUCT_STOCK',
+    await expect(
+      service.buy('product-1', 'customer-1', request, checkoutDto),
+    ).rejects.toMatchObject({
+      code: 'PURCHASE_CONFLICT_RETRY',
     });
   });
 
@@ -442,7 +527,9 @@ describe('ProductsService mobile contract', () => {
   it('already sold product returns PRODUCT_ALREADY_SOLD', async () => {
     const { service } = makeService({ productStatus: ProductListingStatus.SOLD });
 
-    await expect(service.buy('product-1', 'customer-1', request)).rejects.toMatchObject({
+    await expect(
+      service.buy('product-1', 'customer-1', request, checkoutDto),
+    ).rejects.toMatchObject({
       code: 'PRODUCT_ALREADY_SOLD',
     });
   });
@@ -481,6 +568,7 @@ describe('AuctionsService mobile contract', () => {
       },
       bid: {
         update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
         create: jest.fn().mockResolvedValue({
           id: 'bid-2',
           auctionId: 'auction-1',
@@ -491,6 +579,7 @@ describe('AuctionsService mobile contract', () => {
           createdAt: new Date(),
         }),
       },
+      orderItem: { update: jest.fn().mockResolvedValue({}) },
     };
     const prisma = {
       $transaction: jest
@@ -508,6 +597,7 @@ describe('AuctionsService mobile contract', () => {
         findMany: jest.fn().mockResolvedValue([auction()]),
         count: jest.fn().mockResolvedValue(1),
         findFirstOrThrow: jest.fn().mockResolvedValue(auction()),
+        findUnique: jest.fn().mockResolvedValue(auction()),
         findUniqueOrThrow: jest
           .fn()
           .mockResolvedValue(auction({ currentPrice: new Prisma.Decimal(2000) })),
@@ -520,15 +610,43 @@ describe('AuctionsService mobile contract', () => {
     const notifications = { createForCustomer: jest.fn().mockResolvedValue({}) };
     const sockets = { emitToAdmins: jest.fn(), emitToCustomers: jest.fn() };
     const queue = { add: jest.fn().mockResolvedValue({}) };
+    const sales = {
+      createSoldItemInTransaction: jest.fn().mockResolvedValue({
+        items: [
+          {
+            id: 'item-auction-1',
+            orderId: 'order-auction-1',
+            customerId: 'customer-1',
+            price: new Prisma.Decimal('1500'),
+          },
+        ],
+      }),
+      recordSoldItemSideEffects: jest.fn().mockResolvedValue(undefined),
+    };
+    const wallet = {
+      reserveBid: jest.fn().mockResolvedValue(undefined),
+      releaseBid: jest.fn().mockResolvedValue(undefined),
+      settleBid: jest.fn().mockResolvedValue(undefined),
+    };
+    const checkout = {
+      depositFor: (amount: Prisma.Decimal) => amount.mul('0.10'),
+      complete: jest.fn().mockResolvedValue({
+        shipmentRequest: { id: 'shipment-request-1' },
+        walletPaid: new Prisma.Decimal('1500'),
+        cashDue: new Prisma.Decimal(0),
+      }),
+    };
     const service = new AuctionsService(
       prisma as any,
-      {} as any,
+      sales as any,
       auditLogs() as any,
       sockets as any,
       notifications as any,
       queue as any,
+      wallet as any,
+      checkout as any,
     );
-    return { service, prisma, sockets };
+    return { service, prisma, sockets, tx, wallet, sales, checkout };
   }
 
   it('auction list includes serverTime and minimumNextBid', async () => {
@@ -541,6 +659,7 @@ describe('AuctionsService mobile contract', () => {
       id: 'auction-1',
       currentPrice: '1500.00',
       minimumNextBid: '2000.00',
+      bidDepositPercent: 10,
       myHighestBid: '1500.00',
       isWinning: true,
     });
@@ -569,7 +688,7 @@ describe('AuctionsService mobile contract', () => {
   });
 
   it('bid success returns stable bid result and emits auction update', async () => {
-    const { service, sockets } = makeService();
+    const { service, sockets, wallet } = makeService();
 
     const result = await service.placeBid('auction-1', 'customer-1', { amount: 2000 }, request);
 
@@ -581,6 +700,13 @@ describe('AuctionsService mobile contract', () => {
       minimumNextBid: '2500.00',
       isWinning: true,
     });
+    expect(wallet.reserveBid).toHaveBeenCalledWith(
+      expect.anything(),
+      'customer-1',
+      new Prisma.Decimal('200'),
+      'bid-2',
+      undefined,
+    );
     expect(sockets.emitToAdmins).toHaveBeenCalledWith(
       'auction_updated',
       expect.objectContaining({ id: 'auction-1' }),
@@ -589,6 +715,190 @@ describe('AuctionsService mobile contract', () => {
       'auction_updated',
       expect.objectContaining({ id: 'auction-1' }),
     );
+  });
+
+  it('returns the previous winning wallet hold before reserving a higher bid', async () => {
+    const { service, wallet } = makeService({
+      winningBid: {
+        id: 'bid-1',
+        customerId: 'customer-2',
+        amount: new Prisma.Decimal('1500'),
+        walletReserved: true,
+      },
+    });
+    await service.placeBid('auction-1', 'customer-1', { amount: 2000 }, request);
+    expect(wallet.releaseBid).toHaveBeenCalledWith(
+      expect.anything(),
+      'customer-2',
+      new Prisma.Decimal('1500'),
+      'bid-1',
+    );
+    expect(wallet.releaseBid.mock.invocationCallOrder[0]).toBeLessThan(
+      wallet.reserveBid.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('cancelling an auction returns only its active wallet hold', async () => {
+    const { service, wallet, tx } = makeService({
+      winningBid: {
+        id: 'bid-1',
+        customerId: 'customer-1',
+        amount: new Prisma.Decimal('1500'),
+        walletReserved: true,
+      },
+    });
+    await service.cancel('auction-1', 'admin-1', request);
+    expect(wallet.releaseBid).toHaveBeenCalledWith(
+      expect.anything(),
+      'customer-1',
+      new Prisma.Decimal('1500'),
+      'bid-1',
+    );
+    expect(tx.bid.update).toHaveBeenCalledWith({
+      where: { id: 'bid-1' },
+      data: { status: BidStatus.CANCELLED, walletReserved: false },
+    });
+  });
+
+  it('cancelling a legacy bid marks it cancelled without inventing a wallet refund', async () => {
+    const { service, wallet, tx } = makeService({
+      winningBid: {
+        id: 'bid-legacy',
+        customerId: 'customer-1',
+        amount: new Prisma.Decimal('1500'),
+        walletReserved: false,
+      },
+    });
+    await service.cancel('auction-1', 'admin-1', request);
+    expect(wallet.releaseBid).not.toHaveBeenCalled();
+    expect(tx.bid.update).toHaveBeenCalledWith({
+      where: { id: 'bid-legacy' },
+      data: { status: BidStatus.CANCELLED, walletReserved: false },
+    });
+  });
+
+  it('a cancelled auction does not report its refunded bidder as winning or outbid', () => {
+    const { service } = makeService();
+    const response = (service as any).toAuctionResponse(
+      auction({ status: AuctionStatus.CANCELLED }) as any,
+      { customerId: 'customer-1' },
+    );
+    expect(response.isWinning).toBe(false);
+    expect(response.isOutbid).toBe(false);
+  });
+
+  it('keeps the winning deposit reserved and does not create an order until checkout', async () => {
+    const { service, wallet, sales, tx } = makeService({
+      endsAt: new Date(Date.now() - 1000),
+      winningBid: {
+        id: 'bid-1',
+        customerId: 'customer-1',
+        amount: new Prisma.Decimal('1500'),
+        walletReserved: true,
+      },
+    });
+    await service.closeAuction('auction-1');
+    expect(wallet.settleBid).not.toHaveBeenCalled();
+    expect(sales.createSoldItemInTransaction).not.toHaveBeenCalled();
+    expect(tx.orderItem.update).not.toHaveBeenCalled();
+    expect(tx.auction.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: {
+          status: AuctionStatus.ENDED,
+          winnerCustomerId: 'customer-1',
+        },
+      }),
+    );
+  });
+
+  it('reports checkout required for a winner before any order exists', () => {
+    const { service } = makeService();
+    const response = (service as any).toAuctionResponse(
+      auction({
+        status: AuctionStatus.ENDED,
+        winnerCustomerId: 'customer-1',
+        soldOrderItemId: null,
+        soldOrderItem: null,
+      }) as any,
+      { customerId: 'customer-1' },
+    );
+
+    expect(response.checkoutRequired).toBe(true);
+  });
+
+  it('creates the auction order only when the winner confirms checkout', async () => {
+    const { service, sales, checkout, tx } = makeService({
+      status: AuctionStatus.ENDED,
+      endsAt: new Date(Date.now() - 1000),
+      winnerCustomerId: 'customer-1',
+      soldOrderItemId: null,
+      soldOrderItem: null,
+      winningBid: {
+        id: 'bid-1',
+        customerId: 'customer-1',
+        amount: new Prisma.Decimal('1500'),
+        reservedAmount: new Prisma.Decimal('150'),
+        walletReserved: true,
+      },
+    });
+
+    const result = await service.checkoutWonAuction(
+      'auction-1',
+      'customer-1',
+      checkoutDto,
+      request,
+    );
+
+    expect(sales.createSoldItemInTransaction).toHaveBeenCalledTimes(1);
+    expect(tx.auction.update).toHaveBeenCalledWith({
+      where: { id: 'auction-1' },
+      data: { soldOrderItemId: 'item-auction-1' },
+    });
+    expect(checkout.complete).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        orderId: 'order-auction-1',
+        itemIds: ['item-auction-1'],
+        bidHold: { bidId: 'bid-1', amount: new Prisma.Decimal('150') },
+      }),
+    );
+    expect(sales.recordSoldItemSideEffects).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      auctionId: 'auction-1',
+      orderId: 'order-auction-1',
+      orderItemId: 'item-auction-1',
+      status: 'AWAITING_FULFILLMENT',
+    });
+  });
+
+  it('allows an active unverified customer to bid despite legacy verification limits', async () => {
+    const { service, tx } = makeService();
+    tx.customer.findUnique.mockResolvedValue({
+      id: 'customer-1',
+      status: CustomerStatus.ACTIVE,
+      verificationStatus: VerificationStatus.UNVERIFIED,
+      purchaseLimitOverride: null,
+    });
+    tx.appSettings.upsert.mockResolvedValue({
+      allowUnverifiedBidding: false,
+      unverifiedBidLimit: new Prisma.Decimal(0),
+    });
+
+    const result = await service.placeBid('auction-1', 'customer-1', { amount: 2000 }, request);
+    expect(result.bidId).toBe('bid-2');
+  });
+
+  it('continues to reject blocked customers from bidding', async () => {
+    const { service, tx } = makeService();
+    tx.customer.findUnique.mockResolvedValue({
+      id: 'customer-1',
+      status: CustomerStatus.BLOCKED,
+      verificationStatus: VerificationStatus.UNVERIFIED,
+    });
+
+    await expect(
+      service.placeBid('auction-1', 'customer-1', { amount: 2000 }, request),
+    ).rejects.toMatchObject({ code: 'CUSTOMER_NOT_ALLOWED_TO_BID' });
   });
 
   it('bid too low and ended auctions return stable codes', async () => {
@@ -643,7 +953,7 @@ describe('AuctionsService mobile contract', () => {
 
   it('close now delegates to closeAuction', async () => {
     const { service } = makeService();
-    jest.spyOn(service, 'closeAuction').mockResolvedValue({ auction: null, sale: null } as any);
+    jest.spyOn(service, 'closeAuction').mockResolvedValue({ auction: null, sale: null });
 
     await expect(service.closeNow('auction-1', 'admin-1')).resolves.toEqual({
       auction: null,
@@ -732,7 +1042,6 @@ describe('Notifications, uploads, and realtime contracts', () => {
   });
 
   it('uploads validate auth-side image constraints and persist file asset', async () => {
-    const uploadDir = resolve(process.cwd(), 'uploads-test');
     const prisma = {
       fileAsset: {
         create: jest.fn().mockImplementation(({ data, select }) =>
@@ -745,19 +1054,30 @@ describe('Notifications, uploads, and realtime contracts', () => {
         ),
       },
     };
+    const storage = {
+      putObject: jest.fn().mockImplementation((input) =>
+        Promise.resolve({
+          key: input.key,
+          url: `/api/media/${input.key}`,
+          mimeType: input.mimeType,
+          size: input.size,
+        }),
+      ),
+      getObject: jest.fn(),
+      removeObject: jest.fn().mockResolvedValue(undefined),
+    };
     const service = new UploadsService(
       {
         get: jest.fn((key: string) => {
           const values: Record<string, unknown> = {
             'upload.maxBytes': 100,
             'upload.allowedMime': ['image/png'],
-            'upload.localDir': uploadDir,
-            'app.publicBaseUrl': 'http://localhost:3000',
           };
           return values[key];
         }),
       } as any,
       prisma as any,
+      storage,
     );
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
 
@@ -768,7 +1088,12 @@ describe('Notifications, uploads, and realtime contracts', () => {
     );
 
     expect(result).toMatchObject({ mimeType: 'image/png', size: png.length });
+    expect(result.url).toMatch(/^\/api\/media\/products\/.+\.png$/);
+    expect(result.url).not.toContain('localhost');
     expect(result.key).toMatch(/^products\/.+\.png$/);
+    expect(storage.putObject).toHaveBeenCalledWith(
+      expect.objectContaining({ mimeType: 'image/png', size: png.length }),
+    );
     await expect(
       service.uploadImage(
         { originalname: 'test.txt', mimetype: 'text/plain', size: 4, buffer: Buffer.from('test') },
@@ -776,7 +1101,6 @@ describe('Notifications, uploads, and realtime contracts', () => {
         'admin-1',
       ),
     ).rejects.toMatchObject({ code: 'UNSUPPORTED_IMAGE_TYPE' });
-    await rm(uploadDir, { recursive: true, force: true });
   });
 
   it('sockets service emits to expected rooms', () => {

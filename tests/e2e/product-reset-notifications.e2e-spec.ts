@@ -12,6 +12,7 @@ import { AdminNotificationsController } from 'src/notifications/admin-notificati
 import { AdminNotificationsService } from 'src/notifications/admin-notifications.service';
 import { PermissionResolverService } from 'src/permissions/permission-resolver.service';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { PasswordService } from 'src/common/security/password.service';
 
 describe('Admin notification authorization (e2e)', () => {
   let app: INestApplication;
@@ -47,6 +48,10 @@ describe('Admin notification authorization (e2e)', () => {
         JwtAccessGuard,
         PermissionsGuard,
         JwtService,
+        {
+          provide: PasswordService,
+          useValue: { verify: jest.fn().mockResolvedValue(true) },
+        },
         { provide: AdminNotificationsService, useValue: service },
         {
           provide: IdempotencyService,

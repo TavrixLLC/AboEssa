@@ -10,10 +10,10 @@ export const assertPasswordPolicy = (password: string, currentPassword?: string)
     password.length > PASSWORD_MAX_LENGTH ||
     !/[A-Za-z]/.test(password) ||
     !/[0-9]/.test(password) ||
-    !/\S/.test(password)
+    /\s/.test(password)
   ) {
     throw new AppException(
-      `Password must be ${PASSWORD_MIN_LENGTH}-${PASSWORD_MAX_LENGTH} characters and contain a letter and a number`,
+      `Password must be ${PASSWORD_MIN_LENGTH}-${PASSWORD_MAX_LENGTH} characters, contain a letter and a number, and contain no whitespace`,
       'PASSWORD_TOO_WEAK',
     );
   }

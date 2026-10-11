@@ -15,6 +15,7 @@ import { TokenType } from 'src/common/enums/token-type.enum';
 import { JwtAccessPayload } from 'src/common/types/authenticated-user.interface';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { SocketsService } from 'src/sockets/sockets.service';
+import { PasswordService } from 'src/common/security/password.service';
 
 type AuthedSocket = Socket & {
   data: SocketData;
@@ -27,7 +28,26 @@ type SocketData = {
   };
 };
 
-@WebSocketGateway({ cors: { origin: true, credentials: true } })
+type SocketCorsCallback = (error: Error | null, allow?: boolean) => void;
+
+function allowConfiguredSocketOrigin(origin: string | undefined, callback: SocketCorsCallback) {
+  // Native Android clients normally send no browser Origin header.
+  if (!origin) {
+    callback(null, true);
+    return;
+  }
+
+  const configured = (process.env.CORS_ORIGINS ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const allowDevelopmentWildcard =
+    process.env.NODE_ENV !== 'production' && configured.includes('*');
+
+  callback(null, allowDevelopmentWildcard || configured.includes(origin));
+}
+
+@WebSocketGateway({ cors: { origin: allowConfiguredSocketOrigin, credentials: true } })
 export class SocketsGateway implements OnGatewayInit, OnGatewayConnection {
   @WebSocketServer()
   server: Server;
@@ -39,6 +59,7 @@ export class SocketsGateway implements OnGatewayInit, OnGatewayConnection {
     private readonly jwtService: JwtService,
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
+    private readonly passwordService: PasswordService,
   ) {}
 
   afterInit(server: Server) {
@@ -54,7 +75,7 @@ export class SocketsGateway implements OnGatewayInit, OnGatewayConnection {
 
     try {
       const payload = await this.verifyToken(token);
-      await this.joinDefaultRooms(client, payload);
+      await this.joinDefaultRooms(client, payload, token);
       this.getData(client).user = { id: payload.sub, type: payload.type };
     } catch (error) {
       this.logger.debug(`Socket auth failed: ${(error as Error).message}`);
@@ -112,14 +133,25 @@ export class SocketsGateway implements OnGatewayInit, OnGatewayConnection {
     return undefined;
   }
 
-  private async joinDefaultRooms(client: Socket, payload: JwtAccessPayload) {
+  private async joinDefaultRooms(client: Socket, payload: JwtAccessPayload, token: string) {
     if (payload.type === TokenType.Admin) {
       const admin = await this.prisma.adminUser.findUnique({ where: { id: payload.sub } });
-      if (!admin?.isActive || admin.status !== 'ACTIVE' || admin.tokenVersion !== payload.tokenVersion) {
+      if (
+        !admin?.isActive ||
+        admin.status !== 'ACTIVE' ||
+        admin.tokenVersion !== payload.tokenVersion
+      ) {
         throw new Error('Inactive admin socket token');
       }
       if (payload.sessionId) {
-        const session = await this.prisma.adminSession.findFirst({ where: { id: payload.sessionId, adminUserId: admin.id, revokedAt: null, expiresAt: { gt: new Date() } } });
+        const session = await this.prisma.adminSession.findFirst({
+          where: {
+            id: payload.sessionId,
+            adminUserId: admin.id,
+            revokedAt: null,
+            expiresAt: { gt: new Date() },
+          },
+        });
         if (!session) throw new Error('Revoked admin socket session');
       }
       await client.join('admins');
@@ -137,7 +169,14 @@ export class SocketsGateway implements OnGatewayInit, OnGatewayConnection {
     }
 
     const screen = await this.prisma.screenDevice.findUnique({ where: { id: payload.sub } });
-    if (!screen || !screen.isActive || screen.status !== ScreenStatus.ACTIVE || screen.tokenVersion !== payload.tokenVersion) {
+    if (
+      !screen ||
+      !screen.isActive ||
+      screen.status !== ScreenStatus.ACTIVE ||
+      screen.tokenVersion !== payload.tokenVersion ||
+      screen.tokenHash === 'pending-pairing-delivery' ||
+      !(await this.passwordService.verify(screen.tokenHash, token))
+    ) {
       throw new Error('Inactive screen socket token');
     }
     await this.prisma.screenDevice.update({
@@ -145,5 +184,6 @@ export class SocketsGateway implements OnGatewayInit, OnGatewayConnection {
       data: { lastSeenAt: new Date() },
     });
     await client.join('screens');
+    await client.join(`screen:${screen.id}`);
   }
 }

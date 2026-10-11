@@ -3,7 +3,9 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
+  IsInt,
   IsNumber,
+  Max,
   IsOptional,
   IsString,
   Min,
@@ -37,6 +39,14 @@ export class CreateProductDto {
   @IsNumber()
   @Min(0.01)
   price: number;
+
+  @ApiPropertyOptional({ minimum: 1, maximum: 99, nullable: true })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(99)
+  discountPercentage?: number | null;
 
   @ApiPropertyOptional({ minimum: 1, default: 1 })
   @IsOptional()

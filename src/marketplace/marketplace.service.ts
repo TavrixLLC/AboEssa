@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { AuctionStatus, Prisma, ProductListingStatus } from '@prisma/client';
+import { normalizeAuctionRarity } from 'src/auctions/auction-rarity.compat';
 import { getPagination, toPaginatedResult } from 'src/common/pagination/pagination.dto';
 import { MarketplaceQueryDto } from 'src/marketplace/dto/marketplace-query.dto';
 import { MarketplaceItemDto } from 'src/marketplace/dto/marketplace-response.dto';
@@ -14,9 +15,12 @@ export class MarketplaceService {
     const serverTime = new Date();
     const requestedStatus = query.status?.toUpperCase();
     const includeProducts =
-      query.itemType !== 'AUCTION' && (!requestedStatus || requestedStatus === ProductListingStatus.ACTIVE);
+      query.itemType !== 'AUCTION' &&
+      !query.rarity &&
+      (!requestedStatus || requestedStatus === ProductListingStatus.ACTIVE);
     const includeAuctions =
-      query.itemType !== 'PRODUCT' && (!requestedStatus || requestedStatus === AuctionStatus.ACTIVE);
+      query.itemType !== 'PRODUCT' &&
+      (!requestedStatus || requestedStatus === AuctionStatus.ACTIVE);
     const takeForMerge = pagination.skip + pagination.take;
 
     const productWhere: Prisma.ProductListingWhereInput = {
@@ -29,6 +33,7 @@ export class MarketplaceService {
       status: AuctionStatus.ACTIVE,
       endsAt: { gt: serverTime },
       categoryId: query.categoryId,
+      rarity: normalizeAuctionRarity(query.rarity),
       OR: this.search(query.search),
     };
 
@@ -41,7 +46,9 @@ export class MarketplaceService {
             take: takeForMerge,
           })
         : this.prisma.productListing.findMany({ where: { id: '__none__' }, take: 0 }),
-      includeProducts ? this.prisma.productListing.count({ where: productWhere }) : this.prisma.productListing.count({ where: { id: '__none__' } }),
+      includeProducts
+        ? this.prisma.productListing.count({ where: productWhere })
+        : this.prisma.productListing.count({ where: { id: '__none__' } }),
       includeAuctions
         ? this.prisma.auction.findMany({
             where: auctionWhere,
@@ -61,7 +68,9 @@ export class MarketplaceService {
             take: takeForMerge,
           })
         : this.prisma.auction.findMany({ where: { id: '__none__' }, take: 0 }),
-      includeAuctions ? this.prisma.auction.count({ where: auctionWhere }) : this.prisma.auction.count({ where: { id: '__none__' } }),
+      includeAuctions
+        ? this.prisma.auction.count({ where: auctionWhere })
+        : this.prisma.auction.count({ where: { id: '__none__' } }),
     ]);
 
     const items = [
@@ -82,7 +91,9 @@ export class MarketplaceService {
   }
 
   private toProductItem(product: Record<string, any>): MarketplaceItemDto {
-    const price = this.toMoney(product.price);
+    const originalPrice = new Prisma.Decimal(product.price);
+    const discountedPrice = this.discountedPrice(originalPrice, product.discountPercentage);
+    const price = this.toMoney(discountedPrice);
     return {
       itemType: 'PRODUCT',
       id: product.id,
@@ -96,6 +107,10 @@ export class MarketplaceService {
       status: product.status,
       displayPrice: price,
       price,
+      originalPrice: this.toMoney(originalPrice),
+      discountedPrice: price,
+      discountPercentage: product.discountPercentage ?? null,
+      hasDiscount: product.discountPercentage != null,
       totalQuantity: product.totalQuantity,
       availableQuantity: product.availableQuantity,
       soldQuantity: product.soldQuantity,
@@ -105,10 +120,20 @@ export class MarketplaceService {
     };
   }
 
-  private toAuctionItem(auction: Record<string, any>, serverTime: Date, customerId?: string): MarketplaceItemDto {
+  private toAuctionItem(
+    auction: Record<string, any>,
+    serverTime: Date,
+    customerId?: string,
+  ): MarketplaceItemDto {
     const minimumNextBid = new Prisma.Decimal(auction.currentPrice).plus(auction.minIncrement);
-    const isLive = auction.status === AuctionStatus.ACTIVE && auction.startsAt <= serverTime && auction.endsAt > serverTime;
-    const isEnded = auction.status === AuctionStatus.ENDED || auction.status === AuctionStatus.CANCELLED || auction.endsAt <= serverTime;
+    const isLive =
+      auction.status === AuctionStatus.ACTIVE &&
+      auction.startsAt <= serverTime &&
+      auction.endsAt > serverTime;
+    const isEnded =
+      auction.status === AuctionStatus.ENDED ||
+      auction.status === AuctionStatus.CANCELLED ||
+      auction.endsAt <= serverTime;
     const myBid = Array.isArray(auction.bids) ? auction.bids[0] : undefined;
     const isWinning = customerId ? auction.winningBid?.customerId === customerId : null;
     const currentPrice = this.toMoney(auction.currentPrice);
@@ -123,6 +148,7 @@ export class MarketplaceService {
       imageUrls: auction.imageUrls ?? [],
       primaryImageUrl: auction.imageUrls?.[0] ?? null,
       status: auction.status,
+      rarity: auction.rarity,
       displayPrice: currentPrice,
       isAvailable: isLive,
       startingPrice: this.toMoney(auction.startingPrice),
@@ -143,19 +169,32 @@ export class MarketplaceService {
     };
   }
 
-  private compareItems(left: MarketplaceItemDto, right: MarketplaceItemDto, query: MarketplaceQueryDto) {
+  private compareItems(
+    left: MarketplaceItemDto,
+    right: MarketplaceItemDto,
+    query: MarketplaceQueryDto,
+  ) {
     const direction = query.sortOrder === 'asc' ? 1 : -1;
     switch (query.sortBy) {
       case 'createdAt':
-        return direction * (new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+        return (
+          direction * (new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime())
+        );
       case 'price':
         return direction * (Number(left.displayPrice) - Number(right.displayPrice));
       case 'title':
         return direction * left.title.localeCompare(right.title);
       case 'endsAt':
-        return direction * ((left.endsAt?.getTime() ?? Number.MAX_SAFE_INTEGER) - (right.endsAt?.getTime() ?? Number.MAX_SAFE_INTEGER));
+        return (
+          direction *
+          ((left.endsAt?.getTime() ?? Number.MAX_SAFE_INTEGER) -
+            (right.endsAt?.getTime() ?? Number.MAX_SAFE_INTEGER))
+        );
       default:
-        return this.marketplaceRank(left) - this.marketplaceRank(right) || this.defaultTimeRank(left) - this.defaultTimeRank(right);
+        return (
+          this.marketplaceRank(left) - this.marketplaceRank(right) ||
+          this.defaultTimeRank(left) - this.defaultTimeRank(right)
+        );
     }
   }
 
@@ -187,5 +226,19 @@ export class MarketplaceService {
 
   private toMoney(value: Prisma.Decimal | number | string) {
     return new Prisma.Decimal(value).toFixed(2);
+  }
+
+  private discountedPrice(
+    price: Prisma.Decimal | number | string,
+    discountPercentage: number | null | undefined,
+  ) {
+    const original = new Prisma.Decimal(price);
+    if (discountPercentage == null) {
+      return original;
+    }
+    return original
+      .mul(100 - discountPercentage)
+      .div(100)
+      .toDecimalPlaces(2);
   }
 }

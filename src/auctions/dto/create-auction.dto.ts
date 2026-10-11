@@ -1,7 +1,20 @@
 import { AuctionTier } from '@prisma/client';
+import { AuctionRarityInput, auctionRarityInputs } from 'src/auctions/auction-rarity.compat';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, IsDateString, IsEnum, IsInt, IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import {
+  ArrayMaxSize,
+  IsArray,
+  IsDateString,
+  IsEnum,
+  IsIn,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+  MinLength,
+} from 'class-validator';
 
 export class CreateAuctionDto {
   @ApiProperty()
@@ -22,6 +35,11 @@ export class CreateAuctionDto {
   @IsOptional()
   @IsEnum(AuctionTier)
   tier?: AuctionTier;
+
+  @ApiPropertyOptional({ enum: auctionRarityInputs, nullable: true })
+  @IsOptional()
+  @IsIn(auctionRarityInputs)
+  rarity?: AuctionRarityInput | null;
 
   @ApiPropertyOptional({ type: [String] })
   @IsOptional()

@@ -1,5 +1,10 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ProductListingStatus, SaleSource, LabelStatus } from '@prisma/client';
+import {
+  CheckoutPaymentMethod,
+  ProductListingStatus,
+  SaleSource,
+  LabelStatus,
+} from '@prisma/client';
 
 export class ProductResponseDto {
   @ApiProperty()
@@ -25,6 +30,18 @@ export class ProductResponseDto {
 
   @ApiProperty({ example: '15000' })
   price: string;
+
+  @ApiProperty({ example: '15000' })
+  originalPrice: string;
+
+  @ApiProperty({ example: '12000' })
+  discountedPrice: string;
+
+  @ApiPropertyOptional({ minimum: 1, maximum: 99, nullable: true })
+  discountPercentage: number | null;
+
+  @ApiProperty()
+  hasDiscount: boolean;
 
   @ApiProperty({ minimum: 1 })
   totalQuantity: number;
@@ -116,16 +133,28 @@ export class ProductBuyResultDto {
   @ApiProperty({ example: '30000' })
   totalPrice: string;
 
+  @ApiProperty({ enum: CheckoutPaymentMethod })
+  paymentMethod: CheckoutPaymentMethod;
+
+  @ApiProperty({ example: '3000' })
+  walletPaidAmount: string;
+
+  @ApiProperty({ example: '27000' })
+  cashDueAmount: string;
+
+  @ApiProperty()
+  shipmentRequestId: string;
+
   @ApiProperty()
   orderItems: unknown[];
 
   @ApiProperty()
   purchasedAt: Date;
 
-  @ApiProperty({ example: 'PURCHASED' })
+  @ApiProperty({ example: 'AWAITING_FULFILLMENT' })
   status: string;
 
-  @ApiProperty({ example: 'Product purchased successfully' })
+  @ApiProperty({ example: 'Order confirmed and waiting for fulfillment' })
   message: string;
 
   @ApiProperty({ type: ProductResponseDto })

@@ -9,4 +9,3 @@ import { SocketsService } from 'src/sockets/sockets.service';
   exports: [SocketsService],
 })
 export class SocketsModule {}
-

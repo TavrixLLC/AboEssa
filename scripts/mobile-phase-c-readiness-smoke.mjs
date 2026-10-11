@@ -8,7 +8,7 @@
  *   API_BASE_URL=http://localhost:8080
  *   ADMIN_EMAIL=owner@example.com
  *   ADMIN_PASSWORD=change-me-strong
- *   CUSTOMER_ACCESS_TOKEN=... or CUSTOMER_PHONE=+9647... CUSTOMER_OTP=......
+ *   CUSTOMER_ACCESS_TOKEN=... or CUSTOMER_PHONE=+9647... CUSTOMER_PASSWORD=...
  */
 
 import crypto from "node:crypto";

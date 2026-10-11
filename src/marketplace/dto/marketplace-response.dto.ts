@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { AuctionRarity } from '@prisma/client';
 
 export class MarketplaceItemDto {
   @ApiProperty({ enum: ['PRODUCT', 'AUCTION'] })
@@ -37,8 +38,23 @@ export class MarketplaceItemDto {
   @ApiPropertyOptional()
   productId?: string;
 
+  @ApiPropertyOptional({ enum: AuctionRarity, nullable: true })
+  rarity?: AuctionRarity | null;
+
   @ApiPropertyOptional({ example: '15000.00' })
   price?: string;
+
+  @ApiPropertyOptional({ example: '15000.00' })
+  originalPrice?: string;
+
+  @ApiPropertyOptional({ example: '12000.00' })
+  discountedPrice?: string;
+
+  @ApiPropertyOptional({ minimum: 1, maximum: 99, nullable: true })
+  discountPercentage?: number | null;
+
+  @ApiPropertyOptional()
+  hasDiscount?: boolean;
 
   @ApiPropertyOptional()
   totalQuantity?: number;

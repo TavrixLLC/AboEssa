@@ -1,4 +1,15 @@
-import { Body, Controller, Get, Headers, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { ActorType } from '@prisma/client';
 import {
   ApiBearerAuth,
@@ -24,7 +35,11 @@ import { successEnvelopeSchema } from 'src/common/swagger/response-envelope.sche
 import { AuthenticatedUser } from 'src/common/types/authenticated-user.interface';
 import { BuyProductDto } from 'src/products/dto/buy-product.dto';
 import { CreateProductDto } from 'src/products/dto/create-product.dto';
-import { ProductBuyResultDto, ProductListResponseDto, ProductResponseDto } from 'src/products/dto/product-response.dto';
+import {
+  ProductBuyResultDto,
+  ProductListResponseDto,
+  ProductResponseDto,
+} from 'src/products/dto/product-response.dto';
 import { ProductQueryDto } from 'src/products/dto/product-query.dto';
 import { UpdateProductDto } from 'src/products/dto/update-product.dto';
 import { ProductsService } from 'src/products/products.service';
@@ -44,7 +59,11 @@ export class ProductsController {
   @Permissions(PERMISSIONS.PRODUCTS_MANAGE)
   @ApiBearerAuth()
   @ApiCreatedResponse({ schema: successEnvelopeSchema(ProductResponseDto) })
-  create(@Body() dto: CreateProductDto, @CurrentUser() user: AuthenticatedUser, @Req() request: Request) {
+  create(
+    @Body() dto: CreateProductDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request,
+  ) {
     return this.productsService.create(dto, user.id, request);
   }
 
@@ -72,7 +91,12 @@ export class ProductsController {
   @Permissions(PERMISSIONS.PRODUCTS_MANAGE)
   @ApiBearerAuth()
   @ApiOkResponse({ schema: successEnvelopeSchema(ProductResponseDto) })
-  update(@Param('id') id: string, @Body() dto: UpdateProductDto, @CurrentUser() user: AuthenticatedUser, @Req() request: Request) {
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateProductDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request,
+  ) {
     return this.productsService.update(id, dto, user.id, request);
   }
 
@@ -82,7 +106,11 @@ export class ProductsController {
   @Permissions(PERMISSIONS.PRODUCTS_MANAGE)
   @ApiBearerAuth()
   @ApiCreatedResponse({ schema: successEnvelopeSchema(ProductResponseDto) })
-  publish(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser, @Req() request: Request) {
+  publish(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request,
+  ) {
     return this.productsService.publish(id, user.id, request);
   }
 
@@ -132,7 +160,7 @@ export class ProductsController {
   })
   async buy(
     @Param('id') id: string,
-    @Body() dto: BuyProductDto = {},
+    @Body() dto: BuyProductDto,
     @CurrentUser() user: AuthenticatedUser,
     @Req() request: Request,
     @Headers() headers: Record<string, string | string[] | undefined>,
@@ -150,7 +178,7 @@ export class ProductsController {
     if (replay) {
       return replay;
     }
-    const response = await this.productsService.buy(id, user.id, request, dto);
+    const response = await this.productsService.buy(id, user.id, request, dto, key);
     await this.idempotencyService.store({
       key,
       actorType: ActorType.CUSTOMER,

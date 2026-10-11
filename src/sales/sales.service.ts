@@ -53,6 +53,8 @@ export type CreateSoldItemInput = {
   liveOfferId?: string;
   shouldCreatePrintJob?: boolean;
   initialLabelStatus?: LabelStatus;
+  isQuickSale?: boolean;
+  dedicatedOrder?: boolean;
 };
 
 export type SaleResult = {
@@ -62,6 +64,7 @@ export type SaleResult = {
   labelPrintJobs: Awaited<ReturnType<PrismaService['labelPrintJob']['findMany']>>;
   labelPayloads: LabelPayload[];
   session?: { id: string; totalAmount: Prisma.Decimal; numberOfSales: number } | null;
+  quickSaleDisplayRecord?: { id: string } | null;
 };
 
 @Injectable()
@@ -115,6 +118,7 @@ export class SalesService {
         liveSessionId: dto.salesSessionId,
         shouldCreatePrintJob: dto.printNow ?? false,
         initialLabelStatus: LabelStatus.PENDING,
+        isQuickSale: true,
       },
       {
         actorType: ActorType.ADMIN,
@@ -173,7 +177,7 @@ export class SalesService {
         where: { id: APP_SETTINGS_ID },
         create: {
           id: APP_SETTINGS_ID,
-          storeName: 'Single Store',
+          storeName: 'شناشيل',
           currency: 'IQD',
           labelTemplate: {},
         },
@@ -219,9 +223,9 @@ export class SalesService {
     }
 
     const totalAmount = price.mul(quantity);
-    this.validatePurchaseLimit(customer, settings, totalAmount);
-
-    const order = await this.getOrCreateOpenOrder(tx, customer.id);
+    const order = input.dedicatedOrder
+      ? await tx.order.create({ data: { customerId: customer.id } })
+      : await this.getOrCreateOpenOrder(tx, customer.id);
     await tx.customerBox.upsert({
       where: { customerId: customer.id },
       create: {
@@ -313,6 +317,17 @@ export class SalesService {
     const session = input.liveSessionId
       ? await tx.liveSession.findUnique({ where: { id: input.liveSessionId } })
       : null;
+    const quickSaleDisplayRecord = input.isQuickSale
+      ? await tx.quickSaleDisplayRecord.create({
+          data: {
+            customerDisplayName: updatedCustomer.displayName,
+            amount: totalAmount,
+            currency: settings.currency,
+            createdAt: now,
+          },
+          select: { id: true },
+        })
+      : null;
 
     return {
       customer: toSafeCustomer(updatedCustomer),
@@ -321,6 +336,7 @@ export class SalesService {
       labelPrintJobs,
       labelPayloads,
       session,
+      quickSaleDisplayRecord,
     };
   }
 
@@ -333,6 +349,9 @@ export class SalesService {
     await this.writeSaleAudit(primaryAuditAction, input, result.items, context);
     await this.writePrintJobAudit(result.labelPrintJobs, context);
     this.emitSaleEvents(result, input);
+    if (result.quickSaleDisplayRecord) {
+      this.sockets.emitQuickSaleDisplayUpdated(result.quickSaleDisplayRecord.id);
+    }
   }
 
   toPublicSaleResult(result: SaleResult) {
@@ -384,49 +403,6 @@ export class SalesService {
       userAgent: request.headers['user-agent'],
     });
     return customer.id;
-  }
-
-  private validatePurchaseLimit(
-    customer: {
-      verificationStatus: VerificationStatus;
-      purchaseLimitOverride: Prisma.Decimal | null;
-      totalPurchasedAmount: Prisma.Decimal;
-    },
-    settings: {
-      allowUnverifiedPurchase: boolean;
-      unverifiedPurchaseLimit: Prisma.Decimal;
-    },
-    totalAmount: Prisma.Decimal,
-  ) {
-    if (customer.verificationStatus === VerificationStatus.VERIFIED) {
-      return;
-    }
-
-    if (!settings.allowUnverifiedPurchase) {
-      throw new AppException(
-        'Customer is not verified',
-        'CUSTOMER_NOT_VERIFIED',
-        HttpStatus.FORBIDDEN,
-      );
-    }
-
-    const limit = customer.purchaseLimitOverride ?? settings.unverifiedPurchaseLimit;
-    if (new Prisma.Decimal(limit).lessThanOrEqualTo(0) && totalAmount.greaterThan(0)) {
-      throw new AppException(
-        'Customer is not verified',
-        'CUSTOMER_NOT_VERIFIED',
-        HttpStatus.FORBIDDEN,
-      );
-    }
-
-    const totalAfter = new Prisma.Decimal(customer.totalPurchasedAmount).plus(totalAmount);
-    if (totalAfter.greaterThan(limit)) {
-      throw new AppException(
-        'Purchase limit exceeded',
-        'PURCHASE_LIMIT_EXCEEDED',
-        HttpStatus.FORBIDDEN,
-      );
-    }
   }
 
   private async getOrCreateOpenOrder(tx: Prisma.TransactionClient, customerId: string) {

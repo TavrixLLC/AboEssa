@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger, Optional } from '@nestjs/common';
 import { NotificationType, Prisma } from '@prisma/client';
 import { getPagination, toPaginatedResult } from 'src/common/pagination/pagination.dto';
 import { AppException } from 'src/common/exceptions/app.exception';
@@ -7,6 +7,7 @@ import { NotificationResponseDto } from 'src/notifications/dto/notification-resp
 import { UpdateNotificationSettingsDto } from 'src/notifications/dto/update-notification-settings.dto';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { SocketsService } from 'src/sockets/sockets.service';
+import { PushDeliveryService } from 'src/notifications/push-delivery.service';
 
 const preferenceByType: Partial<Record<NotificationType, keyof UpdateNotificationSettingsDto>> = {
   BID_OUTBID: 'auctionOutbid',
@@ -21,9 +22,12 @@ const preferenceByType: Partial<Record<NotificationType, keyof UpdateNotificatio
 
 @Injectable()
 export class NotificationsService {
+  private readonly logger = new Logger(NotificationsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly sockets: SocketsService,
+    @Optional() private readonly pushDelivery?: PushDeliveryService,
   ) {}
 
   async createForCustomer(input: {
@@ -57,6 +61,13 @@ export class NotificationsService {
       ...response,
       notificationId: response.id,
     });
+    if (this.pushDelivery) {
+      try {
+        await this.pushDelivery.enqueueNotification(notification.id);
+      } catch {
+        this.logger.error(`Push enqueue failed safely for notification ${notification.id}`);
+      }
+    }
     return response;
   }
 

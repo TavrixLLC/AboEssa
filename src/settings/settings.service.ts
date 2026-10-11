@@ -24,7 +24,7 @@ export class SettingsService {
       where: { id: APP_SETTINGS_ID },
       create: {
         id: APP_SETTINGS_ID,
-        storeName: 'Single Store',
+        storeName: 'شناشيل',
         currency: 'IQD',
         labelTemplate: defaultLabelTemplate,
       },
@@ -56,7 +56,7 @@ export class SettingsService {
       where: { id: APP_SETTINGS_ID },
       create: {
         id: APP_SETTINGS_ID,
-        storeName: dto.storeName ?? 'Single Store',
+        storeName: dto.storeName ?? 'شناشيل',
         storePhone: dto.storePhone,
         storeAddress: dto.storeAddress,
         currency: dto.currency ?? 'IQD',

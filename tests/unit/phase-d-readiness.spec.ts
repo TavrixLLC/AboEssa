@@ -13,6 +13,8 @@ describe('Backend Phase D readiness contracts', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any,
+      {} as any,
     );
     const response = (service as any).toAuctionResponse({
       id: 'auction-1',

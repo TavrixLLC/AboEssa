@@ -38,6 +38,7 @@ export class ReportsService {
       topCustomers,
       pendingCommissions,
       last7DaysItems,
+      recentPurchases,
     ] = await Promise.all([
       this.prisma.customer.count(),
       this.prisma.customer.count({ where: { isVirtual: true } }),
@@ -78,6 +79,33 @@ export class ReportsService {
       this.prisma.orderItem.findMany({
         where: { soldAt: { gte: last7Days }, status: { not: OrderItemStatus.CANCELLED } },
       }),
+      this.prisma.orderItem.findMany({
+        where: {
+          checkoutConfirmedAt: { not: null },
+          status: { not: OrderItemStatus.CANCELLED },
+        },
+        orderBy: [{ checkoutConfirmedAt: 'desc' }, { createdAt: 'desc' }],
+        take: 12,
+        select: {
+          id: true,
+          title: true,
+          source: true,
+          price: true,
+          quantity: true,
+          status: true,
+          paymentMethod: true,
+          walletPaidAmount: true,
+          cashDueAmount: true,
+          checkoutConfirmedAt: true,
+          customer: {
+            select: {
+              id: true,
+              displayName: true,
+              phone: true,
+            },
+          },
+        },
+      }),
     ]);
 
     return this.serialize({
@@ -100,6 +128,7 @@ export class ReportsService {
       topCustomers,
       pendingCommissions: pendingCommissions._sum.commissionAmount ?? 0,
       last7DaysSales: this.bucketSalesByDay(last7DaysItems),
+      recentPurchases,
       quickCards: {
         pendingLabelsCount,
         shippingRequestsCount,

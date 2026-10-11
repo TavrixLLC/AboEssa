@@ -1,9 +1,17 @@
 import { ProductListingStatus } from '@prisma/client';
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsIn, IsOptional, IsString } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsBoolean, IsEnum, IsIn, IsOptional, IsString } from 'class-validator';
 import { PaginationQueryDto } from 'src/common/pagination/pagination.dto';
 
-const productSortFields = ['createdAt', 'updatedAt', 'publishedAt', 'price', 'title', 'status'] as const;
+const productSortFields = [
+  'createdAt',
+  'updatedAt',
+  'publishedAt',
+  'price',
+  'title',
+  'status',
+] as const;
 const sortOrders = ['asc', 'desc'] as const;
 
 export class ProductQueryDto extends PaginationQueryDto {
@@ -21,6 +29,12 @@ export class ProductQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  @ApiPropertyOptional({ description: 'Return only products with an active discount' })
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true')
+  @IsBoolean()
+  discountedOnly?: boolean;
 
   @ApiPropertyOptional({ enum: productSortFields, default: 'createdAt' })
   @IsOptional()

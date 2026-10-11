@@ -1,9 +1,18 @@
 import { AuctionStatus } from '@prisma/client';
+import { AuctionRarityInput, auctionRarityInputs } from 'src/auctions/auction-rarity.compat';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsEnum, IsIn, IsOptional, IsString } from 'class-validator';
 import { PaginationQueryDto } from 'src/common/pagination/pagination.dto';
 
-const auctionSortFields = ['createdAt', 'updatedAt', 'startsAt', 'endsAt', 'currentPrice', 'title', 'status'] as const;
+const auctionSortFields = [
+  'createdAt',
+  'updatedAt',
+  'startsAt',
+  'endsAt',
+  'currentPrice',
+  'title',
+  'status',
+] as const;
 const sortOrders = ['asc', 'desc'] as const;
 
 export class AuctionQueryDto extends PaginationQueryDto {
@@ -11,6 +20,11 @@ export class AuctionQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsEnum(AuctionStatus)
   status?: AuctionStatus;
+
+  @ApiPropertyOptional({ enum: auctionRarityInputs })
+  @IsOptional()
+  @IsIn(auctionRarityInputs)
+  rarity?: AuctionRarityInput;
 
   @ApiPropertyOptional()
   @IsOptional()

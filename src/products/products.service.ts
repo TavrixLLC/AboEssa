@@ -2,6 +2,7 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { ActorType, LabelStatus, Prisma, ProductListingStatus, SaleSource } from '@prisma/client';
 import { Request } from 'express';
 import { AuditLogsService } from 'src/audit-logs/audit-logs.service';
+import { CheckoutService } from 'src/checkout/checkout.service';
 import { AppException } from 'src/common/exceptions/app.exception';
 import { getPagination, toPaginatedResult } from 'src/common/pagination/pagination.dto';
 import { toSafeCustomer } from 'src/common/utils/safe-user.util';
@@ -14,6 +15,7 @@ import { ProductQueryDto } from 'src/products/dto/product-query.dto';
 import { UpdateProductDto } from 'src/products/dto/update-product.dto';
 import { SalesService } from 'src/sales/sales.service';
 import { SocketsService } from 'src/sockets/sockets.service';
+import { sha256 } from 'src/common/security/hash.util';
 
 type ProductWithMobileRelations = Prisma.ProductListingGetPayload<{
   include: {
@@ -31,10 +33,12 @@ export class ProductsService {
     private readonly auditLogs: AuditLogsService,
     private readonly sockets: SocketsService,
     private readonly notifications: NotificationsService,
+    private readonly checkout: CheckoutService,
   ) {}
 
   async create(dto: CreateProductDto, adminId: string, request: Request) {
-    if (!dto.categoryId) throw new AppException('Category is required', 'CATEGORY_REQUIRED', HttpStatus.BAD_REQUEST);
+    if (!dto.categoryId)
+      throw new AppException('Category is required', 'CATEGORY_REQUIRED', HttpStatus.BAD_REQUEST);
     await this.ensureActiveCategory(dto.categoryId);
     const quantity = this.normalizeQuantity(dto.quantity);
     const product = await this.prisma.productListing.create({
@@ -44,6 +48,7 @@ export class ProductsService {
         categoryId: dto.categoryId,
         imageUrls: dto.imageUrls ?? [],
         price: dto.price,
+        discountPercentage: dto.discountPercentage ?? null,
         totalQuantity: quantity,
         availableQuantity: quantity,
         soldQuantity: 0,
@@ -62,6 +67,7 @@ export class ProductsService {
       status: customerVisible ? ProductListingStatus.ACTIVE : query.status,
       availableQuantity: customerVisible ? { gt: 0 } : undefined,
       categoryId: query.categoryId,
+      discountPercentage: query.discountedOnly ? { not: null } : undefined,
       OR: query.search
         ? [
             { title: { contains: query.search, mode: 'insensitive' } },
@@ -102,7 +108,8 @@ export class ProductsService {
 
   async update(id: string, dto: UpdateProductDto, adminId: string, request: Request) {
     const existing = await this.prisma.productListing.findUniqueOrThrow({ where: { id } });
-    if (dto.categoryId === '') throw new AppException('Category is required', 'CATEGORY_REQUIRED', HttpStatus.BAD_REQUEST);
+    if (dto.categoryId === '')
+      throw new AppException('Category is required', 'CATEGORY_REQUIRED', HttpStatus.BAD_REQUEST);
     if (dto.categoryId) {
       await this.ensureActiveCategory(dto.categoryId);
     }
@@ -113,6 +120,7 @@ export class ProductsService {
       category: dto.categoryId ? { connect: { id: dto.categoryId } } : undefined,
       imageUrls: dto.imageUrls,
       price: dto.price,
+      discountPercentage: dto.discountPercentage,
     };
 
     if (dto.quantity !== undefined) {
@@ -184,16 +192,28 @@ export class ProductsService {
     return this.toProductResponse(product, true);
   }
 
-  async buy(productId: string, customerId: string, request: Request, dto: BuyProductDto = {}) {
+  async buy(
+    productId: string,
+    customerId: string,
+    request: Request,
+    dto: BuyProductDto,
+    idempotencyKey?: string,
+  ) {
     const quantity = this.normalizeQuantity(dto.quantity);
     let transactionResult: Awaited<ReturnType<typeof this.claimInventoryAndCreateSale>>;
     try {
-      transactionResult = await this.claimInventoryAndCreateSale(productId, customerId, quantity);
+      transactionResult = await this.claimInventoryAndCreateSale(
+        productId,
+        customerId,
+        quantity,
+        dto,
+        idempotencyKey,
+      );
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
         throw new AppException(
-          'Insufficient product stock',
-          'INSUFFICIENT_PRODUCT_STOCK',
+          'Purchase changed concurrently; please retry',
+          'PURCHASE_CONFLICT_RETRY',
           HttpStatus.CONFLICT,
         );
       }
@@ -206,7 +226,7 @@ export class ProductsService {
         categoryId: transactionResult.product.categoryId,
         productListingId: transactionResult.product.id,
         source: SaleSource.APP_FIXED_PRICE,
-        price: transactionResult.product.price,
+        price: transactionResult.unitPrice,
         quantity: transactionResult.quantity,
         title: transactionResult.product.title,
         shouldCreatePrintJob: false,
@@ -221,6 +241,26 @@ export class ProductsService {
       },
       'product.sold',
     );
+
+    this.sockets.emitToAdmins(
+      'shipping_request_created',
+      transactionResult.checkout.shipmentRequest,
+    );
+    await this.auditLogs.create({
+      actorType: ActorType.CUSTOMER,
+      actorId: customerId,
+      action: 'product.checkout_confirmed',
+      entityType: 'OrderItem',
+      entityId: transactionResult.sale.items[0].id,
+      metadata: {
+        productId,
+        paymentMethod: dto.paymentMethod,
+        walletPaidAmount: transactionResult.checkout.walletPaid.toFixed(2),
+        cashDueAmount: transactionResult.checkout.cashDue.toFixed(2),
+      },
+      ip: request.ip,
+      userAgent: request.headers['user-agent'],
+    });
 
     this.sockets.emitToAdmins('product_sold', {
       productId,
@@ -250,9 +290,7 @@ export class ProductsService {
     });
     const sale = this.salesService.toPublicSaleResult(transactionResult.sale);
     const item = sale.items[0];
-    const totalPrice = new Prisma.Decimal(transactionResult.product.price).mul(
-      transactionResult.quantity,
-    );
+    const totalPrice = transactionResult.unitPrice.mul(transactionResult.quantity);
 
     return {
       productId,
@@ -264,12 +302,16 @@ export class ProductsService {
       requestedQuantity: transactionResult.quantity,
       purchasedQuantity: sale.items.length,
       remainingQuantity: transactionResult.remainingQuantity,
-      unitPrice: this.toMoney(transactionResult.product.price),
+      unitPrice: this.toMoney(transactionResult.unitPrice),
       totalPrice: this.toMoney(totalPrice),
+      paymentMethod: dto.paymentMethod,
+      walletPaidAmount: this.toMoney(transactionResult.checkout.walletPaid),
+      cashDueAmount: this.toMoney(transactionResult.checkout.cashDue),
+      shipmentRequestId: transactionResult.checkout.shipmentRequest.id,
       orderItems: sale.items,
       purchasedAt: item.soldAt,
-      status: 'PURCHASED',
-      message: 'Product purchased successfully',
+      status: 'AWAITING_FULFILLMENT',
+      message: 'Order confirmed and waiting for fulfillment',
       product: this.toProductResponse(product, false),
       sale,
       item,
@@ -277,7 +319,13 @@ export class ProductsService {
     } satisfies ProductBuyResultDto & { item: unknown; orderItem: unknown };
   }
 
-  private claimInventoryAndCreateSale(productId: string, customerId: string, quantity: number) {
+  private claimInventoryAndCreateSale(
+    productId: string,
+    customerId: string,
+    quantity: number,
+    dto: BuyProductDto,
+    idempotencyKey?: string,
+  ) {
     return this.prisma.$transaction(
       async (tx) => {
         const product = await tx.productListing.findUnique({ where: { id: productId } });
@@ -302,6 +350,8 @@ export class ProductsService {
             HttpStatus.CONFLICT,
           );
         }
+
+        const unitPrice = this.discountedPrice(product.price, product.discountPercentage);
 
         const soldAt = product.soldAt ?? new Date();
         const remainingQuantity = product.availableQuantity - quantity;
@@ -334,13 +384,27 @@ export class ProductsService {
           categoryId: product.categoryId,
           productListingId: product.id,
           source: SaleSource.APP_FIXED_PRICE,
-          price: product.price,
+          price: unitPrice,
           quantity,
           title: product.title,
           description: product.description ?? undefined,
           imageUrl: product.imageUrls[0],
           shouldCreatePrintJob: false,
           initialLabelStatus: LabelStatus.PENDING,
+          dedicatedOrder: true,
+        });
+
+        const checkout = await this.checkout.complete(tx, {
+          customerId,
+          orderId: sale.items[0].orderId,
+          itemIds: sale.items.map((item) => item.id),
+          totalAmount: unitPrice.mul(quantity),
+          paymentMethod: dto.paymentMethod,
+          delivery: dto.delivery,
+          referenceId: sale.items[0].id,
+          eventKey: idempotencyKey
+            ? `product-buy:${customerId}:${sha256(`${productId}:${idempotencyKey}`)}`
+            : `product-buy:${sale.items[0].id}`,
         });
 
         if (!product.soldOrderItemId) {
@@ -350,13 +414,26 @@ export class ProductsService {
           });
         }
 
-        return { product, sale, quantity, remainingQuantity };
+        return {
+          product,
+          sale: {
+            ...sale,
+            items: checkout.updatedItems ?? sale.items,
+            order: checkout.updatedOrder ?? sale.order,
+          },
+          checkout,
+          unitPrice,
+          quantity,
+          remainingQuantity,
+        };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   }
 
   toProductResponse(product: ProductWithMobileRelations, adminContext = false): ProductResponseDto {
+    const originalPrice = new Prisma.Decimal(product.price);
+    const discountedPrice = this.discountedPrice(originalPrice, product.discountPercentage);
     const response: ProductResponseDto = {
       id: product.id,
       title: product.title,
@@ -365,7 +442,11 @@ export class ProductsService {
       categoryName: product.category?.name ?? null,
       imageUrls: product.imageUrls,
       primaryImageUrl: product.imageUrls[0] ?? null,
-      price: this.toMoney(product.price),
+      price: this.toMoney(adminContext ? originalPrice : discountedPrice),
+      originalPrice: this.toMoney(originalPrice),
+      discountedPrice: this.toMoney(discountedPrice),
+      discountPercentage: product.discountPercentage ?? null,
+      hasDiscount: product.discountPercentage != null,
       totalQuantity: product.totalQuantity,
       availableQuantity: product.availableQuantity,
       soldQuantity: product.soldQuantity,
@@ -433,6 +514,20 @@ export class ProductsService {
 
   private toMoney(value: Prisma.Decimal | number | string) {
     return new Prisma.Decimal(value).toFixed(2);
+  }
+
+  private discountedPrice(
+    price: Prisma.Decimal | number | string,
+    discountPercentage: number | null | undefined,
+  ) {
+    const original = new Prisma.Decimal(price);
+    if (discountPercentage == null) {
+      return original;
+    }
+    return original
+      .mul(100 - discountPercentage)
+      .div(100)
+      .toDecimalPlaces(2);
   }
 
   private audit(

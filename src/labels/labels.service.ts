@@ -36,7 +36,11 @@ export class LabelsService {
   async generateBarcode(tx: TransactionClient = this.prisma) {
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     for (let attempt = 0; attempt < 8; attempt += 1) {
-      const suffix = randomBytes(5).toString('base64url').replace(/[-_]/g, '').slice(0, 6).toUpperCase();
+      const suffix = randomBytes(5)
+        .toString('base64url')
+        .replace(/[-_]/g, '')
+        .slice(0, 6)
+        .toUpperCase();
       const barcode = `ITEM-${date}-${suffix}`;
       const existing = await tx.orderItem.findUnique({ where: { barcode } });
       if (!existing) {
@@ -44,10 +48,17 @@ export class LabelsService {
       }
     }
 
-    throw new AppException('Could not generate a unique barcode', 'BARCODE_GENERATION_FAILED', HttpStatus.CONFLICT);
+    throw new AppException(
+      'Could not generate a unique barcode',
+      'BARCODE_GENERATION_FAILED',
+      HttpStatus.CONFLICT,
+    );
   }
 
-  async createLabelPayload(orderItemId: string, tx: TransactionClient = this.prisma): Promise<LabelPayload> {
+  async createLabelPayload(
+    orderItemId: string,
+    tx: TransactionClient = this.prisma,
+  ): Promise<LabelPayload> {
     const [settings, item] = await Promise.all([
       this.getSettings(tx),
       tx.orderItem.findUnique({
@@ -60,7 +71,11 @@ export class LabelsService {
     ]);
 
     if (!item) {
-      throw new AppException('Order item was not found', 'ORDER_ITEM_NOT_FOUND', HttpStatus.NOT_FOUND);
+      throw new AppException(
+        'Order item was not found',
+        'ORDER_ITEM_NOT_FOUND',
+        HttpStatus.NOT_FOUND,
+      );
     }
 
     return {
@@ -85,19 +100,35 @@ export class LabelsService {
     };
   }
 
-  async createPrintJob(orderItemId: string, _adminId?: string, tx: TransactionClient = this.prisma) {
+  async createPrintJob(
+    orderItemId: string,
+    _adminId?: string,
+    tx: TransactionClient = this.prisma,
+  ) {
     const item = await tx.orderItem.findUnique({
       where: { id: orderItemId },
       include: { printJobs: { orderBy: { createdAt: 'desc' }, take: 1 } },
     });
     if (!item) {
-      throw new AppException('Order item was not found', 'ORDER_ITEM_NOT_FOUND', HttpStatus.NOT_FOUND);
+      throw new AppException(
+        'Order item was not found',
+        'ORDER_ITEM_NOT_FOUND',
+        HttpStatus.NOT_FOUND,
+      );
     }
     if (item.status === OrderItemStatus.CANCELLED) {
-      throw new AppException('Cancelled item cannot be printed', 'ORDER_ITEM_CANCELLED', HttpStatus.CONFLICT);
+      throw new AppException(
+        'Cancelled item cannot be printed',
+        'ORDER_ITEM_CANCELLED',
+        HttpStatus.CONFLICT,
+      );
     }
     if (item.labelStatus === LabelStatus.ATTACHED) {
-      throw new AppException('Label is already attached', 'LABEL_ALREADY_ATTACHED', HttpStatus.CONFLICT);
+      throw new AppException(
+        'Label is already attached',
+        'LABEL_ALREADY_ATTACHED',
+        HttpStatus.CONFLICT,
+      );
     }
 
     const existing = item.printJobs.find((job) => job.status !== PrintJobStatus.FAILED);
@@ -111,7 +142,7 @@ export class LabelsService {
         orderItemId: item.id,
         customerId: item.customerId,
         barcode: item.barcode,
-        template: (settings.labelTemplate ?? defaultLabelTemplate),
+        template: settings.labelTemplate ?? defaultLabelTemplate,
         status: PrintJobStatus.PENDING,
       },
     });
@@ -159,7 +190,11 @@ export class LabelsService {
     const job = await this.prisma.$transaction(async (tx) => {
       const existing = await tx.labelPrintJob.findUnique({ where: { id: jobId } });
       if (!existing) {
-        throw new AppException('Print job was not found', 'PRINT_JOB_NOT_FOUND', HttpStatus.NOT_FOUND);
+        throw new AppException(
+          'Print job was not found',
+          'PRINT_JOB_NOT_FOUND',
+          HttpStatus.NOT_FOUND,
+        );
       }
 
       const now = new Date();
@@ -219,7 +254,11 @@ export class LabelsService {
     const job = await this.prisma.$transaction(async (tx) => {
       const existing = await tx.labelPrintJob.findUnique({ where: { id: jobId } });
       if (!existing) {
-        throw new AppException('Print job was not found', 'PRINT_JOB_NOT_FOUND', HttpStatus.NOT_FOUND);
+        throw new AppException(
+          'Print job was not found',
+          'PRINT_JOB_NOT_FOUND',
+          HttpStatus.NOT_FOUND,
+        );
       }
       return this.confirmAttachedForExistingJob(tx, existing, adminId);
     });
@@ -243,10 +282,18 @@ export class LabelsService {
         include: { printJobs: { orderBy: { createdAt: 'desc' }, take: 1 } },
       });
       if (!item) {
-        throw new AppException('Order item was not found', 'ORDER_ITEM_NOT_FOUND', HttpStatus.NOT_FOUND);
+        throw new AppException(
+          'Order item was not found',
+          'ORDER_ITEM_NOT_FOUND',
+          HttpStatus.NOT_FOUND,
+        );
       }
       if (item.status === OrderItemStatus.CANCELLED) {
-        throw new AppException('Cancelled item cannot be confirmed', 'ORDER_ITEM_CANCELLED', HttpStatus.CONFLICT);
+        throw new AppException(
+          'Cancelled item cannot be confirmed',
+          'ORDER_ITEM_CANCELLED',
+          HttpStatus.CONFLICT,
+        );
       }
 
       const latestJob = item.printJobs[0] ?? (await this.createPrintJob(orderItemId, adminId, tx));
@@ -265,7 +312,11 @@ export class LabelsService {
     return job;
   }
 
-  private async confirmAttachedForExistingJob(tx: TransactionClient, job: LabelPrintJob, adminId: string) {
+  private async confirmAttachedForExistingJob(
+    tx: TransactionClient,
+    job: LabelPrintJob,
+    adminId: string,
+  ) {
     const now = new Date();
     const updated = await tx.labelPrintJob.update({
       where: { id: job.id },
@@ -294,7 +345,7 @@ export class LabelsService {
       where: { id: APP_SETTINGS_ID },
       create: {
         id: APP_SETTINGS_ID,
-        storeName: 'Single Store',
+        storeName: 'شناشيل',
         currency: 'IQD',
         labelTemplate: defaultLabelTemplate,
       },

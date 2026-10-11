@@ -1,8 +1,3 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
-
 export function unwrap(body) {
   return body && typeof body === "object" && Object.prototype.hasOwnProperty.call(body, "data") ? body.data : body;
 }
@@ -22,10 +17,6 @@ function idOf(body) {
   return customer?.id;
 }
 
-function digits(value) {
-  return String(value || "").replace(/\D/g, "");
-}
-
 function redact(value) {
   const clone = JSON.parse(JSON.stringify(value ?? null));
   const scrub = (node) => {
@@ -39,25 +30,9 @@ function redact(value) {
   return clone;
 }
 
-async function devOtpFromLogs(phone) {
-  const project = process.env.DOCKER_PROJECT || process.env.SMOKE_DOCKER_PROJECT;
-  const args = ["compose"];
-  if (project) args.push("-p", project);
-  args.push("logs", "--no-color", "--since", "5m", "api");
-  try {
-    const { stdout } = await execFileAsync("docker", args, { timeout: 8000, maxBuffer: 1024 * 1024 });
-    const matches = [...stdout.matchAll(/Development WhatsApp OTP for\s+([^:]+):\s*(\d{6})/g)]
-      .filter((match) => digits(match[1]) === digits(phone));
-    return matches.at(-1)?.[2];
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * Authenticates a customer without printing credentials or tokens.
- * Precedence: CUSTOMER_ACCESS_TOKEN, CUSTOMER_PHONE + CUSTOMER_OTP,
- * then the existing non-production MockWhatsAppProvider log mechanism.
+ * Precedence: CUSTOMER_ACCESS_TOKEN, then CUSTOMER_PHONE + CUSTOMER_PASSWORD.
  */
 export async function authenticateCustomer({ request, phone, displayName, referralCode } = {}) {
   const configuredToken = process.env.CUSTOMER_ACCESS_TOKEN?.trim();
@@ -69,22 +44,32 @@ export async function authenticateCustomer({ request, phone, displayName, referr
   }
 
   const configuredPhone = process.env.CUSTOMER_PHONE?.trim();
-  const configuredOtp = process.env.CUSTOMER_OTP?.trim();
+  const configuredPassword = process.env.CUSTOMER_PASSWORD;
   const loginPhone = configuredPhone || phone;
-  if (!loginPhone) throw new Error("Customer authentication unavailable; set CUSTOMER_ACCESS_TOKEN or CUSTOMER_PHONE and CUSTOMER_OTP");
+  if (!loginPhone || !configuredPassword) {
+    throw new Error("Customer authentication unavailable; set CUSTOMER_ACCESS_TOKEN or CUSTOMER_PHONE and CUSTOMER_PASSWORD");
+  }
 
-  await request("POST", "/api/auth/customer/request-otp", { body: { phone: loginPhone }, expectStatus: [200, 201, 429], allowFail: true });
-  const otp = configuredOtp || await devOtpFromLogs(loginPhone);
-  if (!otp) throw new Error("Customer authentication unavailable; set CUSTOMER_ACCESS_TOKEN or CUSTOMER_PHONE and CUSTOMER_OTP, or run the existing local development OTP provider");
-
-  const verified = await request("POST", "/api/auth/customer/verify-otp", {
-    body: { phone: loginPhone, otp, displayName, referralCode },
-    expectStatus: [200, 201],
+  let authenticated = await request("POST", "/api/auth/customer/login", {
+    body: { phone: loginPhone, password: configuredPassword },
+    expectStatus: [200, 201, 401],
+    allowFail: true,
   });
-  const accessToken = tokenOf(verified.body);
-  const id = idOf(verified.body);
-  if (!accessToken || !id) throw new Error("Customer OTP verification did not return a customer access token");
-  return { token: accessToken, id, phone: loginPhone, profile: customerOf(verified.body) };
+  if (!authenticated.ok) {
+    authenticated = await request("POST", "/api/auth/customer/register", {
+      body: {
+        phone: loginPhone,
+        password: configuredPassword,
+        displayName: displayName || "Smoke Customer",
+        referralCode,
+      },
+      expectStatus: [200, 201],
+    });
+  }
+  const accessToken = tokenOf(authenticated.body);
+  const id = idOf(authenticated.body);
+  if (!accessToken || !id) throw new Error("Customer authentication did not return a customer access token");
+  return { token: accessToken, id, phone: loginPhone, profile: customerOf(authenticated.body) };
 }
 
 export function safeAuthError(error) {

@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { AuctionStatus, AuctionTier, BidStatus } from '@prisma/client';
+import { AuctionRarity, AuctionStatus, AuctionTier, BidStatus } from '@prisma/client';
+import { AuctionRarityInput, auctionRarityInputs } from 'src/auctions/auction-rarity.compat';
 
 export class AuctionResponseDto {
   @ApiProperty()
@@ -25,6 +26,9 @@ export class AuctionResponseDto {
 
   @ApiProperty({ enum: AuctionTier, default: AuctionTier.NORMAL })
   tier: AuctionTier;
+
+  @ApiProperty({ enum: auctionRarityInputs, nullable: true })
+  rarity: AuctionRarityInput | null;
 
   @ApiProperty()
   isVip: boolean;
@@ -59,6 +63,12 @@ export class AuctionResponseDto {
   @ApiProperty()
   totalBids: number;
 
+  @ApiProperty({
+    example: 10,
+    description: 'Percentage of each proposed bid reserved in the wallet',
+  })
+  bidDepositPercent: number;
+
   @ApiPropertyOptional({ nullable: true })
   winnerCustomerId?: string | null;
 
@@ -82,6 +92,9 @@ export class AuctionResponseDto {
 
   @ApiPropertyOptional({ nullable: true })
   isOutbid?: boolean | null;
+
+  @ApiPropertyOptional()
+  checkoutRequired?: boolean;
 
   @ApiPropertyOptional()
   canBid?: boolean;

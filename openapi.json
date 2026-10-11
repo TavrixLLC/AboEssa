@@ -154,6 +154,20 @@
         ]
       }
     },
+    "/ready": {
+      "get": {
+        "operationId": "HealthController_ready",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Health"
+        ]
+      }
+    },
     "/api/time": {
       "get": {
         "operationId": "TimeController_now",
@@ -1231,16 +1245,16 @@
         ]
       }
     },
-    "/api/auth/customer/request-otp": {
+    "/api/auth/customer/register": {
       "post": {
-        "operationId": "CustomerAuthController_requestOtp",
+        "operationId": "CustomerAuthController_register",
         "parameters": [],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RequestOtpDto"
+                "$ref": "#/components/schemas/CustomerRegisterDto"
               }
             }
           }
@@ -1250,22 +1264,22 @@
             "description": ""
           }
         },
-        "summary": "Request WhatsApp OTP for customer login",
+        "summary": "Create a customer account with phone and password",
         "tags": [
           "Customer auth"
         ]
       }
     },
-    "/api/auth/customer/verify-otp": {
+    "/api/auth/customer/login": {
       "post": {
-        "operationId": "CustomerAuthController_verifyOtp",
+        "operationId": "CustomerAuthController_login",
         "parameters": [],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/VerifyOtpDto"
+                "$ref": "#/components/schemas/CustomerLoginDto"
               }
             }
           }
@@ -1275,7 +1289,7 @@
             "description": ""
           }
         },
-        "summary": "Verify OTP and login or claim virtual customer account",
+        "summary": "Customer login with phone and password",
         "tags": [
           "Customer auth"
         ]
@@ -1338,6 +1352,61 @@
             "bearer": []
           }
         ],
+        "tags": [
+          "Customer auth"
+        ]
+      }
+    },
+    "/api/auth/customer/delete-account": {
+      "post": {
+        "operationId": "CustomerAuthController_deleteAccount",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteCustomerAccountDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Permanently delete the authenticated customer account",
+        "tags": [
+          "Customer auth"
+        ]
+      }
+    },
+    "/api/auth/customer/delete-account-request": {
+      "post": {
+        "operationId": "CustomerAuthController_deleteAccountFromWeb",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicDeleteCustomerAccountDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Delete a customer account from the public web resource",
         "tags": [
           "Customer auth"
         ]
@@ -2905,6 +2974,100 @@
         ]
       }
     },
+    "/api/customer/devices": {
+      "post": {
+        "operationId": "CustomerDevicesController_register",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterCustomerDeviceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/CustomerDeviceResponseDto"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Register or rotate the authenticated customer installation push token",
+        "tags": [
+          "Customer devices"
+        ]
+      }
+    },
+    "/api/customer/devices/{installationId}": {
+      "delete": {
+        "operationId": "CustomerDevicesController_unregister",
+        "parameters": [
+          {
+            "name": "installationId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "example": {
+                        "read": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Unregister only this authenticated customer installation",
+        "tags": [
+          "Customer devices"
+        ]
+      }
+    },
     "/api/admin/sales-sessions/start": {
       "post": {
         "operationId": "SalesSessionsController_start",
@@ -3326,46 +3489,6 @@
         "summary": "Confirm label was attached to the physical item",
         "tags": [
           "Labels"
-        ]
-      }
-    },
-    "/api/admin/sales/quick": {
-      "post": {
-        "operationId": "SalesController_quickSale",
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "example": "quick-sale-20260713-0001"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/QuickSaleDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Create a quick manual or TikTok sale",
-        "tags": [
-          "Sales"
         ]
       }
     },
@@ -3976,6 +4099,26 @@
         ]
       }
     },
+    "/api/customer/wallet": {
+      "get": {
+        "operationId": "WalletController_getMine",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get my wallet balances and recent transactions (no funding endpoint)",
+        "tags": [
+          "Customer wallet"
+        ]
+      }
+    },
     "/api/admin/auctions": {
       "post": {
         "operationId": "AuctionsController_create",
@@ -4063,6 +4206,19 @@
                 "ACTIVE",
                 "ENDED",
                 "CANCELLED"
+              ]
+            }
+          },
+          {
+            "name": "rarity",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "NORMAL",
+                "RARE",
+                "LEGENDARY"
               ]
             }
           },
@@ -4468,6 +4624,19 @@
             }
           },
           {
+            "name": "rarity",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "NORMAL",
+                "RARE",
+                "LEGENDARY"
+              ]
+            }
+          },
+          {
             "name": "categoryId",
             "required": false,
             "in": "query",
@@ -4575,6 +4744,73 @@
             }
           }
         },
+        "tags": [
+          "Auctions"
+        ]
+      }
+    },
+    "/api/auctions/wins/pending": {
+      "get": {
+        "operationId": "AuctionsController_pendingWins",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List won auctions awaiting checkout",
+        "tags": [
+          "Auctions"
+        ]
+      }
+    },
+    "/api/auctions/{id}/checkout": {
+      "post": {
+        "operationId": "AuctionsController_checkoutWonAuction",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckoutDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Choose payment and delivery for a won auction",
         "tags": [
           "Auctions"
         ]
@@ -4754,6 +4990,19 @@
             }
           },
           {
+            "name": "rarity",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "NORMAL",
+                "RARE",
+                "LEGENDARY"
+              ]
+            }
+          },
+          {
             "name": "search",
             "required": false,
             "in": "query",
@@ -4862,21 +5111,12 @@
           }
         },
         "responses": {
-          "201": {
+          "200": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean",
-                      "example": true
-                    },
-                    "data": {
-                      "$ref": "#/components/schemas/UploadImageResultDto"
-                    }
-                  }
+                  "$ref": "#/components/schemas/UploadImageResultDto"
                 }
               }
             }
@@ -6697,16 +6937,75 @@
         ]
       }
     },
-    "/api/admin/screens": {
+    "/api/screens/pairing/challenges": {
       "post": {
-        "operationId": "ScreensController_create",
+        "operationId": "ScreensController_createPairingChallenge",
         "parameters": [],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateScreenDto"
+                "$ref": "#/components/schemas/CreatePairingChallengeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "summary": "Create a short-lived one-time TV pairing challenge",
+        "tags": [
+          "Screens"
+        ]
+      }
+    },
+    "/api/screens/pairing/challenges/{id}/status": {
+      "post": {
+        "operationId": "ScreensController_pairingStatus",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingStatusDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "summary": "Poll pairing status and deliver the display credential once",
+        "tags": [
+          "Screens"
+        ]
+      }
+    },
+    "/api/admin/screens/pair": {
+      "post": {
+        "operationId": "ScreensController_pair",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairScreenDto"
               }
             }
           }
@@ -6721,11 +7020,13 @@
             "bearer": []
           }
         ],
-        "summary": "Create a screen device and token",
+        "summary": "Authorize a scanned TV pairing challenge",
         "tags": [
           "Screens"
         ]
-      },
+      }
+    },
+    "/api/admin/screens": {
       "get": {
         "operationId": "ScreensController_findAll",
         "parameters": [],
@@ -6739,7 +7040,7 @@
             "bearer": []
           }
         ],
-        "summary": "List screen devices",
+        "summary": "List display devices without credential material",
         "tags": [
           "Screens"
         ]
@@ -6768,7 +7069,7 @@
             "bearer": []
           }
         ],
-        "summary": "Revoke a screen device token",
+        "summary": "Revoke a display device credential",
         "tags": [
           "Screens"
         ]
@@ -6807,7 +7108,7 @@
             "bearer": []
           }
         ],
-        "summary": "Rename a screen device",
+        "summary": "Rename a display device",
         "tags": [
           "Screens"
         ]
@@ -6827,7 +7128,47 @@
             "bearer": []
           }
         ],
-        "summary": "Get current screen device",
+        "summary": "Validate the current display device session",
+        "tags": [
+          "Screens"
+        ]
+      }
+    },
+    "/api/screens/me/revoke": {
+      "post": {
+        "operationId": "ScreensController_revokeMe",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Revoke the current display during a local reset",
+        "tags": [
+          "Screens"
+        ]
+      }
+    },
+    "/api/screens/quick-sales/recent": {
+      "get": {
+        "operationId": "ScreensController_recentQuickSales",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get the authoritative recent Quick Sale display feed",
         "tags": [
           "Screens"
         ]
@@ -6835,8 +7176,8 @@
     }
   },
   "info": {
-    "title": "Single Store Commerce API",
-    "description": "REST and realtime backend for one-store commerce, customer OTP login, RBAC administration, sales, warehouse, labels, auctions, notifications, and reporting.",
+    "title": "Shanashil Commerce API",
+    "description": "REST and realtime backend for one-store commerce, customer password login, RBAC administration, sales, warehouse, labels, auctions, notifications, and reporting.",
     "version": "0.1.0",
     "contact": {}
   },
@@ -7277,32 +7618,21 @@
           "permissions"
         ]
       },
-      "RequestOtpDto": {
+      "CustomerRegisterDto": {
         "type": "object",
         "properties": {
-          "phone": {
-            "type": "string",
-            "example": "+9647700000000"
-          }
-        },
-        "required": [
-          "phone"
-        ]
-      },
-      "VerifyOtpDto": {
-        "type": "object",
-        "properties": {
-          "phone": {
-            "type": "string",
-            "example": "+9647700000000"
-          },
-          "otp": {
-            "type": "string",
-            "example": "123456"
-          },
           "displayName": {
             "type": "string",
-            "example": "Ahmed"
+            "example": "أحمد"
+          },
+          "phone": {
+            "type": "string",
+            "example": "+9647700000000"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 128
           },
           "referralCode": {
             "type": "string",
@@ -7310,8 +7640,60 @@
           }
         },
         "required": [
+          "displayName",
           "phone",
-          "otp"
+          "password"
+        ]
+      },
+      "CustomerLoginDto": {
+        "type": "object",
+        "properties": {
+          "phone": {
+            "type": "string",
+            "example": "+9647700000000"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "phone",
+          "password"
+        ]
+      },
+      "DeleteCustomerAccountDto": {
+        "type": "object",
+        "properties": {
+          "password": {
+            "type": "string",
+            "writeOnly": true,
+            "minLength": 10,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "password"
+        ]
+      },
+      "PublicDeleteCustomerAccountDto": {
+        "type": "object",
+        "properties": {
+          "password": {
+            "type": "string",
+            "writeOnly": true,
+            "minLength": 10,
+            "maxLength": 128
+          },
+          "phone": {
+            "type": "string",
+            "example": "+9647700000000"
+          }
+        },
+        "required": [
+          "password",
+          "phone"
         ]
       },
       "CreateCustomerAddressDto": {
@@ -7788,6 +8170,21 @@
               "PARTIAL",
               "FAILED"
             ]
+          },
+          "pushProviderEnabled": {
+            "type": "boolean"
+          },
+          "pushQueuedCount": {
+            "type": "number"
+          },
+          "pushSuccessCount": {
+            "type": "number"
+          },
+          "pushFailureCount": {
+            "type": "number"
+          },
+          "noDeviceCount": {
+            "type": "number"
           }
         },
         "required": [
@@ -7795,7 +8192,12 @@
           "recipientCount",
           "createdCount",
           "failedCount",
-          "status"
+          "status",
+          "pushProviderEnabled",
+          "pushQueuedCount",
+          "pushSuccessCount",
+          "pushFailureCount",
+          "noDeviceCount"
         ]
       },
       "AdminNotificationSenderDto": {
@@ -7877,6 +8279,21 @@
               "FAILED"
             ]
           },
+          "pushProviderEnabled": {
+            "type": "boolean"
+          },
+          "pushQueuedCount": {
+            "type": "number"
+          },
+          "pushSuccessCount": {
+            "type": "number"
+          },
+          "pushFailureCount": {
+            "type": "number"
+          },
+          "noDeviceCount": {
+            "type": "number"
+          },
           "sender": {
             "$ref": "#/components/schemas/AdminNotificationSenderDto"
           },
@@ -7895,6 +8312,11 @@
           "createdCount",
           "failureCount",
           "status",
+          "pushProviderEnabled",
+          "pushQueuedCount",
+          "pushSuccessCount",
+          "pushFailureCount",
+          "noDeviceCount",
           "sender",
           "createdAt"
         ]
@@ -8007,6 +8429,78 @@
           "bodyAr"
         ]
       },
+      "CustomerDeviceResponseDto": {
+        "type": "object",
+        "properties": {
+          "installationId": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "ANDROID",
+              "IOS"
+            ]
+          },
+          "preferredLocale": {
+            "type": "string",
+            "enum": [
+              "ar",
+              "en"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "installationId",
+          "platform",
+          "preferredLocale",
+          "enabled",
+          "updatedAt"
+        ]
+      },
+      "RegisterCustomerDeviceDto": {
+        "type": "object",
+        "properties": {
+          "installationId": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 128
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "ANDROID",
+              "IOS"
+            ]
+          },
+          "token": {
+            "type": "string",
+            "writeOnly": true,
+            "minLength": 16,
+            "maxLength": 4096
+          },
+          "preferredLocale": {
+            "type": "string",
+            "enum": [
+              "ar",
+              "en"
+            ]
+          }
+        },
+        "required": [
+          "installationId",
+          "platform",
+          "token",
+          "preferredLocale"
+        ]
+      },
       "StartSalesSessionDto": {
         "type": "object",
         "properties": {
@@ -8042,72 +8536,6 @@
         },
         "required": [
           "error"
-        ]
-      },
-      "QuickSaleDto": {
-        "type": "object",
-        "properties": {
-          "customerId": {
-            "type": "string"
-          },
-          "createVirtualCustomer": {
-            "$ref": "#/components/schemas/CreateVirtualCustomerDto"
-          },
-          "price": {
-            "type": "number",
-            "example": 4000
-          },
-          "categoryId": {
-            "type": "string"
-          },
-          "quantity": {
-            "type": "number",
-            "default": 1
-          },
-          "source": {
-            "type": "string",
-            "enum": [
-              "TIKTOK_LIVE_MANUAL",
-              "ADMIN_MANUAL"
-            ],
-            "example": "ADMIN_MANUAL"
-          },
-          "title": {
-            "type": "string"
-          },
-          "description": {
-            "type": "string"
-          },
-          "imageUrl": {
-            "type": "string"
-          },
-          "snapshotUrl": {
-            "type": "string"
-          },
-          "isBroken": {
-            "type": "boolean",
-            "default": false
-          },
-          "isGift": {
-            "type": "boolean",
-            "default": false
-          },
-          "isReplacement": {
-            "type": "boolean",
-            "default": false
-          },
-          "salesSessionId": {
-            "type": "string"
-          },
-          "printNow": {
-            "type": "boolean",
-            "default": false
-          }
-        },
-        "required": [
-          "price",
-          "categoryId",
-          "source"
         ]
       },
       "ProductResponseDto": {
@@ -8300,6 +8728,24 @@
             "type": "string",
             "example": "30000"
           },
+          "paymentMethod": {
+            "type": "string",
+            "enum": [
+              "WALLET",
+              "CASH_ON_DELIVERY"
+            ]
+          },
+          "walletPaidAmount": {
+            "type": "string",
+            "example": "3000"
+          },
+          "cashDueAmount": {
+            "type": "string",
+            "example": "27000"
+          },
+          "shipmentRequestId": {
+            "type": "string"
+          },
           "orderItems": {
             "type": "array",
             "items": {
@@ -8312,11 +8758,11 @@
           },
           "status": {
             "type": "string",
-            "example": "PURCHASED"
+            "example": "AWAITING_FULFILLMENT"
           },
           "message": {
             "type": "string",
-            "example": "Product purchased successfully"
+            "example": "Order confirmed and waiting for fulfillment"
           },
           "product": {
             "$ref": "#/components/schemas/ProductResponseDto"
@@ -8337,6 +8783,10 @@
           "remainingQuantity",
           "unitPrice",
           "totalPrice",
+          "paymentMethod",
+          "walletPaidAmount",
+          "cashDueAmount",
+          "shipmentRequestId",
           "orderItems",
           "purchasedAt",
           "status",
@@ -8406,15 +8856,59 @@
           }
         }
       },
+      "CheckoutDeliveryDto": {
+        "type": "object",
+        "properties": {
+          "fullName": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "governorate": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "addressLine": {
+            "type": "string"
+          },
+          "nearestPoint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "fullName",
+          "phone",
+          "governorate",
+          "city",
+          "addressLine"
+        ]
+      },
       "BuyProductDto": {
         "type": "object",
         "properties": {
+          "paymentMethod": {
+            "type": "string",
+            "enum": [
+              "WALLET",
+              "CASH_ON_DELIVERY"
+            ]
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/CheckoutDeliveryDto"
+          },
           "quantity": {
             "type": "number",
             "minimum": 1,
             "default": 1
           }
-        }
+        },
+        "required": [
+          "paymentMethod",
+          "delivery"
+        ]
       },
       "AuctionResponseDto": {
         "type": "object",
@@ -8459,6 +8953,14 @@
             ],
             "default": "NORMAL"
           },
+          "rarity": {
+            "type": "string",
+            "enum": [
+              "NORMAL",
+              "RARE",
+              "LEGENDARY"
+            ]
+          },
           "isVip": {
             "type": "boolean"
           },
@@ -8499,6 +9001,11 @@
           "totalBids": {
             "type": "number"
           },
+          "bidDepositPercent": {
+            "type": "number",
+            "example": 10,
+            "description": "Percentage of each proposed bid reserved in the wallet"
+          },
           "winnerCustomerId": {
             "type": "object",
             "nullable": true
@@ -8528,6 +9035,9 @@
             "type": "object",
             "nullable": true
           },
+          "checkoutRequired": {
+            "type": "boolean"
+          },
           "canBid": {
             "type": "boolean"
           },
@@ -8547,6 +9057,7 @@
           "imageUrls",
           "status",
           "tier",
+          "rarity",
           "isVip",
           "startingPrice",
           "currentPrice",
@@ -8557,7 +9068,8 @@
           "serverTime",
           "isLive",
           "isEnded",
-          "totalBids"
+          "totalBids",
+          "bidDepositPercent"
         ]
       },
       "AuctionListResponseDto": {
@@ -8710,6 +9222,15 @@
             ],
             "default": "NORMAL"
           },
+          "rarity": {
+            "type": "string",
+            "enum": [
+              "NORMAL",
+              "RARE",
+              "LEGENDARY"
+            ],
+            "default": "NORMAL"
+          },
           "imageUrls": {
             "type": "array",
             "items": {
@@ -8767,6 +9288,15 @@
             ],
             "default": "NORMAL"
           },
+          "rarity": {
+            "type": "string",
+            "enum": [
+              "NORMAL",
+              "RARE",
+              "LEGENDARY"
+            ],
+            "default": "NORMAL"
+          },
           "imageUrls": {
             "type": "array",
             "items": {
@@ -8795,6 +9325,25 @@
             "type": "number"
           }
         }
+      },
+      "CheckoutDto": {
+        "type": "object",
+        "properties": {
+          "paymentMethod": {
+            "type": "string",
+            "enum": [
+              "WALLET",
+              "CASH_ON_DELIVERY"
+            ]
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/CheckoutDeliveryDto"
+          }
+        },
+        "required": [
+          "paymentMethod",
+          "delivery"
+        ]
       },
       "PlaceBidDto": {
         "type": "object",
@@ -8856,6 +9405,14 @@
           },
           "productId": {
             "type": "string"
+          },
+          "rarity": {
+            "type": "string",
+            "enum": [
+              "NORMAL",
+              "RARE",
+              "LEGENDARY"
+            ]
           },
           "price": {
             "type": "string",
@@ -8971,7 +9528,7 @@
         "properties": {
           "url": {
             "type": "string",
-            "example": "http://localhost:8080/uploads/products/image-id.webp"
+            "example": "/api/media/products/image-id.webp"
           },
           "key": {
             "type": "string",
@@ -9164,16 +9721,48 @@
           }
         }
       },
-      "CreateScreenDto": {
+      "CreatePairingChallengeDto": {
         "type": "object",
         "properties": {
-          "name": {
+          "installationId": {
             "type": "string",
-            "example": "Main TV"
+            "example": "9db34b3c-76d7-4e87-88a9-65273c473070"
           }
         },
         "required": [
-          "name"
+          "installationId"
+        ]
+      },
+      "PairingStatusDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Short-lived opaque secret from the TV pairing challenge"
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
+      "PairScreenDto": {
+        "type": "object",
+        "properties": {
+          "challengeId": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "Short-lived opaque secret scanned from the TV"
+          },
+          "name": {
+            "type": "string",
+            "example": "Main Store TV"
+          }
+        },
+        "required": [
+          "challengeId",
+          "code"
         ]
       },
       "RenameScreenDto": {

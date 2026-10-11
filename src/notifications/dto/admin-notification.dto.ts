@@ -153,6 +153,21 @@ export class AdminNotificationSendResponseDto {
 
   @ApiProperty({ enum: NotificationCampaignStatus })
   status: NotificationCampaignStatus;
+
+  @ApiProperty()
+  pushProviderEnabled: boolean;
+
+  @ApiProperty()
+  pushQueuedCount: number;
+
+  @ApiProperty()
+  pushSuccessCount: number;
+
+  @ApiProperty()
+  pushFailureCount: number;
+
+  @ApiProperty()
+  noDeviceCount: number;
 }
 
 export class AdminNotificationSenderDto {
@@ -202,6 +217,21 @@ export class AdminNotificationCampaignResponseDto {
 
   @ApiProperty({ enum: NotificationCampaignStatus })
   status: NotificationCampaignStatus;
+
+  @ApiProperty()
+  pushProviderEnabled: boolean;
+
+  @ApiProperty()
+  pushQueuedCount: number;
+
+  @ApiProperty()
+  pushSuccessCount: number;
+
+  @ApiProperty()
+  pushFailureCount: number;
+
+  @ApiProperty()
+  noDeviceCount: number;
 
   @ApiProperty({ type: AdminNotificationSenderDto })
   sender: AdminNotificationSenderDto;

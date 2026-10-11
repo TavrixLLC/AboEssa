@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger, Optional } from '@nestjs/common';
 import {
   ActorType,
   AuctionStatus,
@@ -22,15 +22,19 @@ import {
 } from 'src/notifications/dto/admin-notification.dto';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { SocketsService } from 'src/sockets/sockets.service';
+import { PushDeliveryService } from 'src/notifications/push-delivery.service';
 
 const DELIVERY_BATCH_SIZE = 500;
 
 @Injectable()
 export class AdminNotificationsService {
+  private readonly logger = new Logger(AdminNotificationsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
     private readonly sockets: SocketsService,
+    @Optional() private readonly pushDelivery?: PushDeliveryService,
   ) {}
 
   async preview(dto: AudiencePreviewDto) {
@@ -152,7 +156,18 @@ export class AdminNotificationsService {
       });
 
       this.sockets.emitNotificationRefresh(audience.customerIds, campaign.id);
-      return this.sendResult(campaign);
+      if (this.pushDelivery) {
+        try {
+          await this.pushDelivery.enqueueCampaign(campaign.id);
+        } catch {
+          this.logger.error(`Push enqueue failed safely for campaign ${campaign.id}`);
+        }
+      }
+      if (!this.pushDelivery) return this.sendResult(campaign);
+      const withDelivery = await this.prisma.notificationCampaign.findUnique({
+        where: { id: campaign.id },
+      });
+      return this.sendResult(withDelivery ?? campaign);
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         return this.replay(adminId, idempotencyKey, requestHash);
@@ -370,6 +385,10 @@ export class AdminNotificationsService {
     createdCount: number;
     failureCount: number;
     status: NotificationCampaignStatus;
+    pushQueuedCount?: number;
+    pushSuccessCount?: number;
+    pushFailureCount?: number;
+    noDeviceCount?: number;
   }) {
     return {
       campaignId: campaign.id,
@@ -377,6 +396,11 @@ export class AdminNotificationsService {
       createdCount: campaign.createdCount,
       failedCount: campaign.failureCount,
       status: campaign.status,
+      pushProviderEnabled: this.pushDelivery?.providerEnabled ?? false,
+      pushQueuedCount: campaign.pushQueuedCount ?? 0,
+      pushSuccessCount: campaign.pushSuccessCount ?? 0,
+      pushFailureCount: campaign.pushFailureCount ?? 0,
+      noDeviceCount: campaign.noDeviceCount ?? 0,
     };
   }
 
@@ -394,6 +418,10 @@ export class AdminNotificationsService {
     createdCount: number;
     failureCount: number;
     status: NotificationCampaignStatus;
+    pushQueuedCount: number;
+    pushSuccessCount: number;
+    pushFailureCount: number;
+    noDeviceCount: number;
     createdAt: Date;
     createdByAdmin: { id: string; name: string; displayName: string | null };
   }) {
@@ -411,6 +439,11 @@ export class AdminNotificationsService {
       createdCount: campaign.createdCount,
       failureCount: campaign.failureCount,
       status: campaign.status,
+      pushProviderEnabled: this.pushDelivery?.providerEnabled ?? false,
+      pushQueuedCount: campaign.pushQueuedCount,
+      pushSuccessCount: campaign.pushSuccessCount,
+      pushFailureCount: campaign.pushFailureCount,
+      noDeviceCount: campaign.noDeviceCount,
       sender: {
         id: campaign.createdByAdmin.id,
         name: campaign.createdByAdmin.displayName || campaign.createdByAdmin.name,

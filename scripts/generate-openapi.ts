@@ -15,7 +15,10 @@ async function generate() {
     .compile();
   const app = moduleRef.createNestApplication();
   app.setGlobalPrefix('api', {
-    exclude: [{ path: 'health', method: RequestMethod.GET }],
+    exclude: [
+      { path: 'health', method: RequestMethod.GET },
+      { path: 'ready', method: RequestMethod.GET },
+    ],
   });
   const document = SwaggerModule.createDocument(app, buildOpenApiConfig());
   writeFileSync(

@@ -1,40 +1,66 @@
+name: aboessa
+
 services:
   api:
     build:
       context: .
       dockerfile: Dockerfile
     env_file:
-      - .env
+      - ${ABOESSA_PRODUCTION_ENV_FILE:?ABOESSA_PRODUCTION_ENV_FILE must point to the external production environment file}
     environment:
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/live_commerce?schema=public
-      REDIS_URL: redis://redis:6379
+      NODE_ENV: production
+      PORT: "3000"
+      TRUST_PROXY_HOPS: "1"
+      SWAGGER_ENABLED: "false"
+      FIREBASE_SERVICE_ACCOUNT_FILE: /run/secrets/aboessa-firebase-admin.json
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: "9000"
+      MINIO_USE_SSL: "false"
     restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio:
+        condition: service_healthy
     expose:
       - "3000"
     volumes:
       - uploads:/app/uploads
-    command: sh -c "npx prisma migrate deploy && node dist/src/main.js"
+    secrets:
+      - source: postgres_password
+        target: postgres_password
+      - source: redis_password
+        target: redis_password
+      - source: firebase_admin
+        target: aboessa-firebase-admin.json
+    entrypoint: ["/app/docker/api/production-entrypoint.sh"]
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/ready', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 45s
 
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    stop_grace_period: 60s
+    security_opt:
+      - no-new-privileges:true
     environment:
       POSTGRES_DB: live_commerce
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    secrets:
+      - postgres_password
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d live_commerce"]
       interval: 10s
@@ -44,11 +70,49 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: redis-server --appendonly yes
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        umask 077
+        redis_password="$$(cat /run/secrets/redis_password)"
+        if printf '%s' "$$redis_password" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+          echo 'Redis password contains an unsupported control character.' >&2
+          exit 1
+        fi
+        escaped_password="$$(printf '%s' "$$redis_password" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+        printf 'appendonly yes\nrequirepass "%s"\n' "$$escaped_password" > /tmp/redis.conf
+        unset redis_password escaped_password
+        exec redis-server /tmp/redis.conf
     volumes:
       - redis_data:/data
+    tmpfs:
+      - /tmp
+    secrets:
+      - redis_password
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$(cat /run/secrets/redis_password) redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: unless-stopped
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - ${ABOESSA_PRODUCTION_ENV_FILE:?ABOESSA_PRODUCTION_ENV_FILE must point to the external production environment file}
+    command: server /data --console-address ":9001"
+    expose:
+      - "9000"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -56,14 +120,46 @@ services:
   nginx:
     image: nginx:1.27-alpine
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PRODUCTION_DOMAIN: ${PRODUCTION_DOMAIN:?PRODUCTION_DOMAIN must be the owner-provided production hostname}
+      NGINX_ENVSUBST_FILTER: ^PRODUCTION_DOMAIN$
     ports:
       - "80:80"
+      - "443:443"
     volumes:
-      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./docker/nginx/default.conf:/etc/nginx/templates/default.conf.template:ro
+      - ./public/legal:/usr/share/nginx/html/legal:ro
+    secrets:
+      - source: tls_fullchain
+        target: tls-fullchain.pem
+      - source: tls_private_key
+        target: tls-private-key.pem
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
 volumes:
   postgres_data:
   redis_data:
+  minio_data:
   uploads:
+
+secrets:
+  postgres_password:
+    file: ${POSTGRES_PASSWORD_FILE:?POSTGRES_PASSWORD_FILE must point to the external PostgreSQL password file}
+  redis_password:
+    file: ${REDIS_PASSWORD_FILE:?REDIS_PASSWORD_FILE must point to the external Redis password file}
+  firebase_admin:
+    file: ${FIREBASE_SERVICE_ACCOUNT_HOST_FILE:?FIREBASE_SERVICE_ACCOUNT_HOST_FILE must point to the external Firebase Admin JSON}
+  tls_fullchain:
+    file: ${TLS_FULLCHAIN_FILE:?TLS_FULLCHAIN_FILE must point to the legitimate TLS full chain}
+  tls_private_key:
+    file: ${TLS_PRIVATE_KEY_FILE:?TLS_PRIVATE_KEY_FILE must point to the legitimate TLS private key}

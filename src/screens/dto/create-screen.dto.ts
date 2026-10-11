@@ -7,4 +7,3 @@ export class CreateScreenDto {
   @MinLength(1)
   name: string;
 }
-

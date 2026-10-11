@@ -1,4 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { AuctionRarityInput, auctionRarityInputs } from 'src/auctions/auction-rarity.compat';
 import { IsIn, IsOptional, IsString } from 'class-validator';
 import { PaginationQueryDto } from 'src/common/pagination/pagination.dto';
 
@@ -16,6 +17,11 @@ export class MarketplaceQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsString()
   categoryId?: string;
+
+  @ApiPropertyOptional({ enum: auctionRarityInputs })
+  @IsOptional()
+  @IsIn(auctionRarityInputs)
+  rarity?: AuctionRarityInput;
 
   @ApiPropertyOptional()
   @IsOptional()

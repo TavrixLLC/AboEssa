@@ -211,6 +211,13 @@ export class CustomersService {
 
   async unblock(id: string, adminId: string, request: Request) {
     const existing = await this.prisma.customer.findUniqueOrThrow({ where: { id } });
+    if (existing.deletedAt) {
+      throw new AppException(
+        'A deleted customer account cannot be restored',
+        'CUSTOMER_ACCOUNT_DELETED',
+        HttpStatus.CONFLICT,
+      );
+    }
     const customer = await this.prisma.customer.update({
       where: { id },
       data: { status: existing.isVirtual ? CustomerStatus.VIRTUAL : CustomerStatus.ACTIVE },

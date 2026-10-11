@@ -17,7 +17,8 @@ export type RealtimeEvent =
   | 'staff_status_changed'
   | 'staff_access_changed'
   | 'staff_session_revoked'
-  | 'role_updated';
+  | 'role_updated'
+  | 'quick_sale_display_updated';
 
 @Injectable()
 export class SocketsService {
@@ -53,10 +54,17 @@ export class SocketsService {
   emitSale(payload: unknown, customerId?: string) {
     this.emitToAdmins('order_item_sold', payload);
     this.emitToAdmins('last_sale_updated', payload);
-    this.emitToScreens('last_sale_updated', payload);
     if (customerId) {
       this.emitToCustomer(customerId, 'order_item_sold', payload);
     }
+  }
+
+  emitQuickSaleDisplayUpdated(recordId: string) {
+    this.emitToScreens('quick_sale_display_updated', { refresh: true, recordId });
+  }
+
+  disconnectScreen(screenId: string) {
+    this.server?.in(`screen:${screenId}`).disconnectSockets(true);
   }
 
   emitLabelJobUpdated(payload: unknown) {

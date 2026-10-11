@@ -5,19 +5,29 @@ import {
   AuctionStatus,
   AuctionTier,
   BidStatus,
+  CheckoutStatus,
   CustomerStatus,
   LabelStatus,
   NotificationType,
   Prisma,
   SaleSource,
-  VerificationStatus,
 } from '@prisma/client';
 import { Queue } from 'bullmq';
 import { Request } from 'express';
 import { AuditLogsService } from 'src/audit-logs/audit-logs.service';
+import { CheckoutService } from 'src/checkout/checkout.service';
+import { CheckoutDto } from 'src/checkout/dto/checkout.dto';
 import { AUCTION_CLOSE_QUEUE } from 'src/auctions/auction-queue.constants';
+import {
+  legacyAdminAuctionRarity,
+  normalizeAuctionRarity,
+} from 'src/auctions/auction-rarity.compat';
 import { AuctionQueryDto } from 'src/auctions/dto/auction-query.dto';
-import { AuctionResponseDto, BidResponseDto, PlaceBidResultDto } from 'src/auctions/dto/auction-response.dto';
+import {
+  AuctionResponseDto,
+  BidResponseDto,
+  PlaceBidResultDto,
+} from 'src/auctions/dto/auction-response.dto';
 import { CreateAuctionDto } from 'src/auctions/dto/create-auction.dto';
 import { PlaceBidDto } from 'src/auctions/dto/place-bid.dto';
 import { UpdateAuctionDto } from 'src/auctions/dto/update-auction.dto';
@@ -30,6 +40,8 @@ import { NotificationsService } from 'src/notifications/notifications.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { SalesService } from 'src/sales/sales.service';
 import { SocketsService } from 'src/sockets/sockets.service';
+import { WalletService } from 'src/wallet/wallet.service';
+import { sha256 } from 'src/common/security/hash.util';
 
 @Injectable()
 export class AuctionsService {
@@ -40,6 +52,8 @@ export class AuctionsService {
     private readonly sockets: SocketsService,
     private readonly notifications: NotificationsService,
     @InjectQueue(AUCTION_CLOSE_QUEUE) private readonly closeQueue: Queue,
+    private readonly wallet: WalletService,
+    private readonly checkout: CheckoutService,
   ) {}
 
   async create(
@@ -52,9 +66,14 @@ export class AuctionsService {
     const startsAt = new Date(dto.startsAt);
     const endsAt = new Date(dto.endsAt);
     if (endsAt <= startsAt) {
-      throw new AppException('Auction end must be after start', 'INVALID_AUCTION_TIME', HttpStatus.BAD_REQUEST);
+      throw new AppException(
+        'Auction end must be after start',
+        'INVALID_AUCTION_TIME',
+        HttpStatus.BAD_REQUEST,
+      );
     }
-    if (!dto.categoryId) throw new AppException('Category is required', 'CATEGORY_REQUIRED', HttpStatus.BAD_REQUEST);
+    if (!dto.categoryId)
+      throw new AppException('Category is required', 'CATEGORY_REQUIRED', HttpStatus.BAD_REQUEST);
     await this.ensureActiveCategory(dto.categoryId);
     const tier = dto.tier ?? AuctionTier.NORMAL;
     this.assertVipPermission(tier, adminUser);
@@ -69,11 +88,13 @@ export class AuctionsService {
         minIncrement: dto.minIncrement,
         status: AuctionStatus.DRAFT,
         tier,
+        rarity: normalizeAuctionRarity(dto.rarity) ?? null,
         startsAt,
         endsAt,
         originalEndsAt: endsAt,
         extensionSeconds: dto.extensionSeconds ?? settings.defaultAuctionExtensionSeconds,
-        extensionTriggerSeconds: dto.extensionTriggerSeconds ?? settings.defaultAuctionExtensionTriggerSeconds,
+        extensionTriggerSeconds:
+          dto.extensionTriggerSeconds ?? settings.defaultAuctionExtensionTriggerSeconds,
         maxExtensions: dto.maxExtensions ?? settings.maxAuctionExtensions,
         createdByAdminId: adminId,
       },
@@ -92,9 +113,14 @@ export class AuctionsService {
   ) {
     const existing = await this.prisma.auction.findUniqueOrThrow({ where: { id } });
     if (existing.status !== AuctionStatus.DRAFT) {
-      throw new AppException('Only draft auctions can be edited', 'AUCTION_NOT_EDITABLE', HttpStatus.CONFLICT);
+      throw new AppException(
+        'Only draft auctions can be edited',
+        'AUCTION_NOT_EDITABLE',
+        HttpStatus.CONFLICT,
+      );
     }
-    if (dto.categoryId === '') throw new AppException('Category is required', 'CATEGORY_REQUIRED', HttpStatus.BAD_REQUEST);
+    if (dto.categoryId === '')
+      throw new AppException('Category is required', 'CATEGORY_REQUIRED', HttpStatus.BAD_REQUEST);
     if (dto.categoryId) {
       await this.ensureActiveCategory(dto.categoryId);
     }
@@ -108,6 +134,7 @@ export class AuctionsService {
         description: dto.description,
         categoryId: dto.categoryId,
         tier: dto.tier,
+        rarity: normalizeAuctionRarity(dto.rarity),
         imageUrls: dto.imageUrls,
         startingPrice: dto.startingPrice,
         currentPrice: dto.startingPrice,
@@ -140,11 +167,59 @@ export class AuctionsService {
   }
 
   async cancel(id: string, adminId: string, request: Request) {
-    const auction = await this.prisma.auction.update({
-      where: { id },
-      data: { status: AuctionStatus.CANCELLED },
-      include: this.auctionInclude(),
-    });
+    const auction = await this.prisma
+      .$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT id FROM "Auction" WHERE id = ${id} FOR UPDATE`;
+          const existing = await tx.auction.findUnique({
+            where: { id },
+            include: { winningBid: true },
+          });
+          if (!existing) {
+            throw new AppException(
+              'Auction was not found',
+              'AUCTION_NOT_FOUND',
+              HttpStatus.NOT_FOUND,
+            );
+          }
+          if (existing.status === AuctionStatus.ENDED) {
+            throw new AppException('Auction has ended', 'AUCTION_ENDED', HttpStatus.CONFLICT);
+          }
+          if (existing.status === AuctionStatus.CANCELLED) {
+            return tx.auction.findUniqueOrThrow({ where: { id }, include: this.auctionInclude() });
+          }
+          if (existing.winningBid?.walletReserved) {
+            await this.wallet.releaseBid(
+              tx,
+              existing.winningBid.customerId,
+              existing.winningBid.reservedAmount ?? existing.winningBid.amount,
+              existing.winningBid.id,
+            );
+          }
+          if (existing.winningBid) {
+            await tx.bid.update({
+              where: { id: existing.winningBid.id },
+              data: { status: BidStatus.CANCELLED, walletReserved: false },
+            });
+          }
+          return tx.auction.update({
+            where: { id },
+            data: { status: AuctionStatus.CANCELLED },
+            include: this.auctionInclude(),
+          });
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      )
+      .catch((error: unknown) => {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
+          throw new AppException(
+            'Auction changed concurrently; please retry',
+            'AUCTION_CONFLICT_RETRY',
+            HttpStatus.CONFLICT,
+          );
+        }
+        throw error;
+      });
     await this.audit(adminId, 'auction.cancelled', id, {}, request);
     const response = this.toAuctionResponse(auction, { adminContext: true });
     this.sockets.emitToAdmins('auction_updated', response);
@@ -157,6 +232,7 @@ export class AuctionsService {
     const where: Prisma.AuctionWhereInput = {
       status: customerVisible ? AuctionStatus.ACTIVE : query.status,
       categoryId: query.categoryId,
+      rarity: normalizeAuctionRarity(query.rarity),
       OR: query.search
         ? [
             { title: { contains: query.search, mode: 'insensitive' } },
@@ -197,10 +273,7 @@ export class AuctionsService {
       where.OR = [
         { status: AuctionStatus.ACTIVE },
         ...(customerId
-          ? [
-              { bids: { some: { customerId } } },
-              { winnerCustomerId: customerId },
-            ]
+          ? [{ bids: { some: { customerId } } }, { winnerCustomerId: customerId }]
           : []),
       ];
     }
@@ -215,6 +288,24 @@ export class AuctionsService {
     });
   }
 
+  async pendingWins(customerId: string) {
+    const auctions = await this.prisma.auction.findMany({
+      where: {
+        status: AuctionStatus.ENDED,
+        winnerCustomerId: customerId,
+        OR: [
+          { soldOrderItemId: null },
+          { soldOrderItem: { is: { checkoutStatus: CheckoutStatus.AWAITING_SELECTION } } },
+        ],
+      },
+      include: this.auctionInclude(customerId),
+      orderBy: { endsAt: 'desc' },
+    });
+    return auctions.map((auction) =>
+      this.toAuctionResponse(auction, { customerId, includeDetails: true }),
+    );
+  }
+
   async bids(id: string) {
     const bids = await this.prisma.bid.findMany({
       where: { auctionId: id },
@@ -224,105 +315,147 @@ export class AuctionsService {
     return bids.map((bid) => this.toBidResponse(bid, true));
   }
 
-  async placeBid(auctionId: string, customerId: string, dto: PlaceBidDto, request: Request) {
-    const result = await this.prisma.$transaction(
-      async (tx) => {
-        await tx.$queryRaw`SELECT id FROM "Auction" WHERE id = ${auctionId} FOR UPDATE`;
-        const [settings, customer, auction] = await Promise.all([
-          tx.appSettings.upsert({
-            where: { id: APP_SETTINGS_ID },
-            create: { id: APP_SETTINGS_ID, storeName: 'Single Store', currency: 'IQD', labelTemplate: {} },
-            update: {},
-          }),
-          tx.customer.findUnique({ where: { id: customerId } }),
-          tx.auction.findUnique({ where: { id: auctionId }, include: { winningBid: true } }),
-        ]);
+  async placeBid(
+    auctionId: string,
+    customerId: string,
+    dto: PlaceBidDto,
+    request: Request,
+    idempotencyKey?: string,
+  ) {
+    const result = await this.prisma
+      .$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT id FROM "Auction" WHERE id = ${auctionId} FOR UPDATE`;
+          const [customer, auction] = await Promise.all([
+            tx.customer.findUnique({ where: { id: customerId } }),
+            tx.auction.findUnique({ where: { id: auctionId }, include: { winningBid: true } }),
+          ]);
 
-        if (!auction) {
-          throw new AppException('Auction was not found', 'AUCTION_NOT_FOUND', HttpStatus.NOT_FOUND);
-        }
-        if (auction.status === AuctionStatus.CANCELLED) {
-          throw new AppException('Auction was cancelled', 'AUCTION_CANCELLED', HttpStatus.CONFLICT);
-        }
-        if (auction.status === AuctionStatus.ENDED) {
-          throw new AppException('Auction has ended', 'AUCTION_ENDED', HttpStatus.CONFLICT);
-        }
-        if (auction.status !== AuctionStatus.ACTIVE) {
-          throw new AppException('Auction has not started', 'AUCTION_NOT_STARTED', HttpStatus.CONFLICT);
-        }
-        const now = new Date();
-        if (now < auction.startsAt) {
-          throw new AppException('Auction has not started', 'AUCTION_NOT_STARTED', HttpStatus.CONFLICT);
-        }
-        if (now >= auction.endsAt) {
-          throw new AppException('Auction has ended', 'AUCTION_ENDED', HttpStatus.CONFLICT);
-        }
-        if (!customer || customer.status === CustomerStatus.BLOCKED) {
+          if (!auction) {
+            throw new AppException(
+              'Auction was not found',
+              'AUCTION_NOT_FOUND',
+              HttpStatus.NOT_FOUND,
+            );
+          }
+          if (auction.status === AuctionStatus.CANCELLED) {
+            throw new AppException(
+              'Auction was cancelled',
+              'AUCTION_CANCELLED',
+              HttpStatus.CONFLICT,
+            );
+          }
+          if (auction.status === AuctionStatus.ENDED) {
+            throw new AppException('Auction has ended', 'AUCTION_ENDED', HttpStatus.CONFLICT);
+          }
+          if (auction.status !== AuctionStatus.ACTIVE) {
+            throw new AppException(
+              'Auction has not started',
+              'AUCTION_NOT_STARTED',
+              HttpStatus.CONFLICT,
+            );
+          }
+          const now = new Date();
+          if (now < auction.startsAt) {
+            throw new AppException(
+              'Auction has not started',
+              'AUCTION_NOT_STARTED',
+              HttpStatus.CONFLICT,
+            );
+          }
+          if (now >= auction.endsAt) {
+            throw new AppException('Auction has ended', 'AUCTION_ENDED', HttpStatus.CONFLICT);
+          }
+          if (!customer || customer.status === CustomerStatus.BLOCKED) {
+            throw new AppException(
+              'Customer is not allowed to bid',
+              'CUSTOMER_NOT_ALLOWED_TO_BID',
+              HttpStatus.FORBIDDEN,
+            );
+          }
+          const amount = new Prisma.Decimal(dto.amount);
+          if (
+            amount.lessThan(new Prisma.Decimal(auction.currentPrice).plus(auction.minIncrement))
+          ) {
+            throw new AppException(
+              'Bid is lower than minimum increment',
+              'BID_TOO_LOW',
+              HttpStatus.BAD_REQUEST,
+            );
+          }
+
+          const previousWinningBid = auction.winningBid;
+          if (previousWinningBid) {
+            if (previousWinningBid.walletReserved) {
+              await this.wallet.releaseBid(
+                tx,
+                previousWinningBid.customerId,
+                previousWinningBid.reservedAmount ?? previousWinningBid.amount,
+                previousWinningBid.id,
+              );
+            }
+            await tx.bid.update({
+              where: { id: previousWinningBid.id },
+              data: { status: BidStatus.OUTBID, walletReserved: false },
+            });
+          }
+
+          const reservedAmount = this.checkout.depositFor(amount);
+          const bid = await tx.bid.create({
+            data: {
+              auctionId,
+              customerId,
+              amount,
+              reservedAmount,
+              status: BidStatus.WINNING,
+              walletReserved: true,
+              placedAt: now,
+            },
+          });
+          await this.wallet.reserveBid(
+            tx,
+            customerId,
+            reservedAmount,
+            bid.id,
+            idempotencyKey
+              ? `bid-hold:${customerId}:${sha256(`${auctionId}:${idempotencyKey}`)}`
+              : undefined,
+          );
+
+          const secondsLeft = Math.floor((auction.endsAt.getTime() - now.getTime()) / 1000);
+          const shouldExtend =
+            secondsLeft <= auction.extensionTriggerSeconds &&
+            auction.extensionsCount < auction.maxExtensions;
+          const nextEndsAt = shouldExtend
+            ? new Date(
+                Math.max(auction.endsAt.getTime(), now.getTime()) + auction.extensionSeconds * 1000,
+              )
+            : auction.endsAt;
+
+          const updatedAuction = await tx.auction.update({
+            where: { id: auctionId },
+            data: {
+              currentPrice: amount,
+              winningBidId: bid.id,
+              endsAt: nextEndsAt,
+              extensionsCount: shouldExtend ? { increment: 1 } : undefined,
+            },
+          });
+
+          return { bid, auction: updatedAuction, previousWinningBid, extended: shouldExtend };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      )
+      .catch((error: unknown) => {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
           throw new AppException(
-            'Customer is not allowed to bid',
-            'CUSTOMER_NOT_ALLOWED_TO_BID',
-            HttpStatus.FORBIDDEN,
+            'Bid changed concurrently; please retry',
+            'BID_CONFLICT_RETRY',
+            HttpStatus.CONFLICT,
           );
         }
-        if (customer.verificationStatus !== VerificationStatus.VERIFIED) {
-          if (!settings.allowUnverifiedBidding) {
-            throw new AppException(
-              'Customer is not allowed to bid',
-              'CUSTOMER_NOT_ALLOWED_TO_BID',
-              HttpStatus.FORBIDDEN,
-            );
-          }
-          const limit = customer.purchaseLimitOverride ?? settings.unverifiedBidLimit ?? new Prisma.Decimal(0);
-          if (new Prisma.Decimal(dto.amount).greaterThan(limit)) {
-            throw new AppException(
-              'Customer is not allowed to bid',
-              'CUSTOMER_NOT_ALLOWED_TO_BID',
-              HttpStatus.FORBIDDEN,
-            );
-          }
-        }
-
-        const amount = new Prisma.Decimal(dto.amount);
-        if (amount.lessThan(new Prisma.Decimal(auction.currentPrice).plus(auction.minIncrement))) {
-          throw new AppException('Bid is lower than minimum increment', 'BID_TOO_LOW', HttpStatus.BAD_REQUEST);
-        }
-
-        const previousWinningBid = auction.winningBid;
-        if (previousWinningBid) {
-          await tx.bid.update({ where: { id: previousWinningBid.id }, data: { status: BidStatus.OUTBID } });
-        }
-
-        const bid = await tx.bid.create({
-          data: {
-            auctionId,
-            customerId,
-            amount,
-            status: BidStatus.WINNING,
-            placedAt: now,
-          },
-        });
-
-        const secondsLeft = Math.floor((auction.endsAt.getTime() - now.getTime()) / 1000);
-        const shouldExtend =
-          secondsLeft <= auction.extensionTriggerSeconds && auction.extensionsCount < auction.maxExtensions;
-        const nextEndsAt = shouldExtend
-          ? new Date(Math.max(auction.endsAt.getTime(), now.getTime()) + auction.extensionSeconds * 1000)
-          : auction.endsAt;
-
-        const updatedAuction = await tx.auction.update({
-          where: { id: auctionId },
-          data: {
-            currentPrice: amount,
-            winningBidId: bid.id,
-            endsAt: nextEndsAt,
-            extensionsCount: shouldExtend ? { increment: 1 } : undefined,
-          },
-        });
-
-        return { bid, auction: updatedAuction, previousWinningBid, extended: shouldExtend };
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
+        throw error;
+      });
 
     if (result.extended) {
       await this.scheduleClose(result.auction.id, result.auction.endsAt);
@@ -373,27 +506,24 @@ export class AuctionsService {
         }
 
         if (!auction.winningBid) {
-          const ended = await tx.auction.update({ where: { id: auction.id }, data: { status: AuctionStatus.ENDED } });
+          const ended = await tx.auction.update({
+            where: { id: auction.id },
+            data: { status: AuctionStatus.ENDED },
+          });
           return { auction: ended, sale: null };
         }
 
-        await tx.bid.update({ where: { id: auction.winningBid.id }, data: { status: BidStatus.WON } });
-        await tx.bid.updateMany({
-          where: { auctionId, id: { not: auction.winningBid.id }, status: { not: BidStatus.CANCELLED } },
-          data: { status: BidStatus.LOST },
+        await tx.bid.update({
+          where: { id: auction.winningBid.id },
+          data: { status: BidStatus.WON },
         });
-
-        const sale = await this.salesService.createSoldItemInTransaction(tx, {
-          customerId: auction.winningBid.customerId,
-          categoryId: auction.categoryId,
-          auctionId: auction.id,
-          source: SaleSource.APP_AUCTION,
-          price: auction.currentPrice,
-          title: auction.title,
-          description: auction.description ?? undefined,
-          imageUrl: auction.imageUrls[0],
-          shouldCreatePrintJob: false,
-          initialLabelStatus: LabelStatus.PENDING,
+        await tx.bid.updateMany({
+          where: {
+            auctionId,
+            id: { not: auction.winningBid.id },
+            status: { not: BidStatus.CANCELLED },
+          },
+          data: { status: BidStatus.LOST },
         });
 
         const ended = await tx.auction.update({
@@ -401,10 +531,9 @@ export class AuctionsService {
           data: {
             status: AuctionStatus.ENDED,
             winnerCustomerId: auction.winningBid.customerId,
-            soldOrderItemId: sale.items[0].id,
           },
         });
-        return { auction: ended, sale, bids: auction.bids };
+        return { auction: ended, sale: null, bids: auction.bids };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
@@ -414,32 +543,18 @@ export class AuctionsService {
       return closeResult;
     }
 
-    if (closeResult.sale && closeResult.auction) {
-      await this.salesService.recordSoldItemSideEffects(
-        {
-          customerId: closeResult.sale.items[0].customerId,
-          categoryId: closeResult.auction.categoryId,
-          auctionId: closeResult.auction.id,
-          source: SaleSource.APP_AUCTION,
-          price: closeResult.sale.items[0].price,
-          title: closeResult.auction.title,
-          shouldCreatePrintJob: false,
-          initialLabelStatus: LabelStatus.PENDING,
-        },
-        closeResult.sale,
-        { actorType: actorId ? ActorType.ADMIN : ActorType.SYSTEM, actorId },
-        'auction.closed',
-      );
+    if (closeResult.bids && closeResult.auction?.winnerCustomerId) {
+      const winnerCustomerId = closeResult.auction.winnerCustomerId;
       await this.notifications.createForCustomer({
-        customerId: closeResult.sale.items[0].customerId,
+        customerId: winnerCustomerId,
         type: NotificationType.AUCTION_WON,
         title: 'Auction won',
         body: closeResult.auction.title,
-        data: { auctionId: closeResult.auction.id, orderItemId: closeResult.sale.items[0].id },
+        data: { auctionId: closeResult.auction.id },
       });
       const losingCustomerIds = new Set(
         closeResult.bids
-          ?.filter((bid) => bid.customerId !== closeResult.sale?.items[0].customerId)
+          .filter((bid) => bid.customerId !== winnerCustomerId)
           .map((bid) => bid.customerId),
       );
       await Promise.all(
@@ -460,7 +575,9 @@ export class AuctionsService {
         where: { id: closeResult.auction.id },
         include: this.auctionInclude(),
       });
-      const payload = auction ? this.toAuctionResponse(auction, { adminContext: true }) : closeResult.auction;
+      const payload = auction
+        ? this.toAuctionResponse(auction, { adminContext: true })
+        : closeResult.auction;
       this.sockets.emitToAdmins('auction_closed', payload);
       this.sockets.emitToCustomers('auction_closed', payload);
       await this.auditLogs.create({
@@ -475,6 +592,157 @@ export class AuctionsService {
     return closeResult;
   }
 
+  async checkoutWonAuction(
+    auctionId: string,
+    customerId: string,
+    dto: CheckoutDto,
+    request: Request,
+  ) {
+    const result = await this.prisma
+      .$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT id FROM "Auction" WHERE id = ${auctionId} FOR UPDATE`;
+          const auction = await tx.auction.findUnique({
+            where: { id: auctionId },
+            include: { winningBid: true, soldOrderItem: true },
+          });
+          if (!auction || auction.winnerCustomerId !== customerId) {
+            throw new AppException(
+              'Auction win was not found',
+              'AUCTION_WIN_NOT_FOUND',
+              HttpStatus.NOT_FOUND,
+            );
+          }
+          if (auction.status !== AuctionStatus.ENDED || !auction.winningBid?.walletReserved) {
+            throw new AppException(
+              'Auction checkout is not available',
+              'AUCTION_CHECKOUT_UNAVAILABLE',
+              HttpStatus.CONFLICT,
+            );
+          }
+          if (
+            auction.soldOrderItem &&
+            auction.soldOrderItem.checkoutStatus !== CheckoutStatus.AWAITING_SELECTION
+          ) {
+            throw new AppException(
+              'Auction checkout is not available',
+              'AUCTION_CHECKOUT_UNAVAILABLE',
+              HttpStatus.CONFLICT,
+            );
+          }
+
+          const sale = auction.soldOrderItem
+            ? null
+            : await this.salesService.createSoldItemInTransaction(tx, {
+                customerId,
+                categoryId: auction.categoryId,
+                auctionId: auction.id,
+                source: SaleSource.APP_AUCTION,
+                price: auction.currentPrice,
+                title: auction.title,
+                description: auction.description ?? undefined,
+                imageUrl: auction.imageUrls[0],
+                shouldCreatePrintJob: false,
+                initialLabelStatus: LabelStatus.PENDING,
+                dedicatedOrder: true,
+              });
+          const item = auction.soldOrderItem ?? sale!.items[0];
+          if (sale) {
+            await tx.auction.update({
+              where: { id: auction.id },
+              data: { soldOrderItemId: item.id },
+            });
+          }
+          const checkout = await this.checkout.complete(tx, {
+            customerId,
+            orderId: item.orderId,
+            itemIds: [item.id],
+            totalAmount: new Prisma.Decimal(item.price),
+            paymentMethod: dto.paymentMethod,
+            delivery: dto.delivery,
+            referenceId: item.id,
+            eventKey: `auction-checkout:${auctionId}:${customerId}`,
+            bidHold: {
+              bidId: auction.winningBid.id,
+              amount: auction.winningBid.reservedAmount ?? auction.winningBid.amount,
+            },
+          });
+          await tx.bid.update({
+            where: { id: auction.winningBid.id },
+            data: { walletReserved: false },
+          });
+          return { auction, item, checkout, sale };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      )
+      .catch((error: unknown) => {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
+          throw new AppException(
+            'Checkout changed concurrently; please retry',
+            'CHECKOUT_CONFLICT_RETRY',
+            HttpStatus.CONFLICT,
+          );
+        }
+        throw error;
+      });
+
+    if (result.sale) {
+      await this.salesService.recordSoldItemSideEffects(
+        {
+          customerId,
+          categoryId: result.auction.categoryId,
+          auctionId: result.auction.id,
+          source: SaleSource.APP_AUCTION,
+          price: result.item.price,
+          title: result.auction.title,
+          description: result.auction.description ?? undefined,
+          imageUrl: result.auction.imageUrls[0],
+          shouldCreatePrintJob: false,
+          initialLabelStatus: LabelStatus.PENDING,
+          dedicatedOrder: true,
+        },
+        result.sale,
+        { actorType: ActorType.CUSTOMER, actorId: customerId },
+        'auction.checkout_sale_created',
+      );
+    }
+
+    await this.auditLogs.create({
+      actorType: ActorType.CUSTOMER,
+      actorId: customerId,
+      action: 'auction.checkout_confirmed',
+      entityType: 'OrderItem',
+      entityId: result.item.id,
+      metadata: {
+        auctionId,
+        paymentMethod: dto.paymentMethod,
+        walletPaidAmount: result.checkout.walletPaid.toFixed(2),
+        cashDueAmount: result.checkout.cashDue.toFixed(2),
+      },
+      ip: request.ip,
+      userAgent: request.headers['user-agent'],
+    });
+    this.sockets.emitToAdmins('shipping_request_created', result.checkout.shipmentRequest);
+    await this.notifications.createForCustomer({
+      customerId,
+      type: NotificationType.ORDER_UPDATED,
+      title: 'Auction order confirmed',
+      body: result.auction.title,
+      data: { auctionId, orderItemId: result.item.id },
+    });
+    return {
+      auctionId,
+      orderId: result.item.orderId,
+      orderItemId: result.item.id,
+      shipmentRequestId: result.checkout.shipmentRequest.id,
+      paymentMethod: dto.paymentMethod,
+      totalAmount: new Prisma.Decimal(result.item.price).toFixed(2),
+      walletPaidAmount: result.checkout.walletPaid.toFixed(2),
+      cashDueAmount: result.checkout.cashDue.toFixed(2),
+      status: 'AWAITING_FULFILLMENT',
+    };
+  }
+
   async closeNow(id: string, adminId: string) {
     await this.prisma.auction.update({ where: { id }, data: { endsAt: new Date() } });
     const result = await this.closeAuction(id, adminId);
@@ -485,7 +753,10 @@ export class AuctionsService {
       where: { id: result.auction.id },
       include: this.auctionInclude(),
     });
-    return { ...result, auction: auction ? this.toAuctionResponse(auction, { adminContext: true }) : result.auction };
+    return {
+      ...result,
+      auction: auction ? this.toAuctionResponse(auction, { adminContext: true }) : result.auction,
+    };
   }
 
   async scheduleClose(auctionId: string, endsAt: Date) {
@@ -500,7 +771,7 @@ export class AuctionsService {
   private getSettings() {
     return this.prisma.appSettings.upsert({
       where: { id: APP_SETTINGS_ID },
-      create: { id: APP_SETTINGS_ID, storeName: 'Single Store', currency: 'IQD', labelTemplate: {} },
+      create: { id: APP_SETTINGS_ID, storeName: 'شناشيل', currency: 'IQD', labelTemplate: {} },
       update: {},
     });
   }
@@ -519,6 +790,7 @@ export class AuctionsService {
     return {
       category: true,
       winningBid: true,
+      soldOrderItem: true,
       winnerCustomer: true,
       _count: { select: { bids: true } },
       bids: customerId
@@ -551,10 +823,17 @@ export class AuctionsService {
   ): AuctionResponseDto {
     const now = options.serverTime ?? new Date();
     const minimumNextBid = new Prisma.Decimal(auction.currentPrice).plus(auction.minIncrement);
-    const isLive = auction.status === AuctionStatus.ACTIVE && auction.startsAt <= now && auction.endsAt > now;
-    const isEnded = auction.status === AuctionStatus.ENDED || auction.status === AuctionStatus.CANCELLED || auction.endsAt <= now;
+    const isLive =
+      auction.status === AuctionStatus.ACTIVE && auction.startsAt <= now && auction.endsAt > now;
+    const isEnded =
+      auction.status === AuctionStatus.ENDED ||
+      auction.status === AuctionStatus.CANCELLED ||
+      auction.endsAt <= now;
     const myBid = Array.isArray(auction.bids) ? auction.bids[0] : undefined;
-    const isWinning = options.customerId ? auction.winningBid?.customerId === options.customerId : null;
+    const isWinning = options.customerId
+      ? auction.status !== AuctionStatus.CANCELLED &&
+        auction.winningBid?.customerId === options.customerId
+      : null;
     const response: AuctionResponseDto = {
       id: auction.id,
       title: auction.title,
@@ -564,6 +843,7 @@ export class AuctionsService {
       imageUrls: auction.imageUrls ?? [],
       status: auction.status,
       tier: auction.tier ?? AuctionTier.NORMAL,
+      rarity: options.adminContext ? legacyAdminAuctionRarity(auction.rarity) : auction.rarity,
       isVip: (auction.tier ?? AuctionTier.NORMAL) === AuctionTier.VIP,
       startingPrice: this.toMoney(auction.startingPrice),
       currentPrice: this.toMoney(auction.currentPrice),
@@ -575,7 +855,8 @@ export class AuctionsService {
       isLive,
       isEnded,
       totalBids: auction._count?.bids ?? auction.bids?.length ?? 0,
-      winnerCustomerId: options.adminContext ? auction.winnerCustomerId ?? null : null,
+      bidDepositPercent: 10,
+      winnerCustomerId: options.adminContext ? (auction.winnerCustomerId ?? null) : null,
     };
 
     if (options.includeDetails || options.adminContext) {
@@ -590,11 +871,19 @@ export class AuctionsService {
     if (options.customerId) {
       response.myHighestBid = myBid ? this.toMoney(myBid.amount) : null;
       response.isWinning = isWinning;
-      response.isOutbid = myBid ? !isWinning : false;
+      response.isOutbid = myBid && auction.status !== AuctionStatus.CANCELLED ? !isWinning : false;
+      response.checkoutRequired = Boolean(
+        auction.status === AuctionStatus.ENDED &&
+        auction.winnerCustomerId === options.customerId &&
+        (auction.soldOrderItemId === null ||
+          auction.soldOrderItem?.checkoutStatus === CheckoutStatus.AWAITING_SELECTION),
+      );
     }
 
     if (options.adminContext) {
-      response.winnerCustomer = auction.winnerCustomer ? toSafeCustomer(auction.winnerCustomer) : null;
+      response.winnerCustomer = auction.winnerCustomer
+        ? toSafeCustomer(auction.winnerCustomer)
+        : null;
     }
 
     return response;
@@ -611,7 +900,9 @@ export class AuctionsService {
       bidId: bid.id,
       amount: this.toMoney(bid.amount),
       currentPrice: this.toMoney(auction.currentPrice),
-      minimumNextBid: this.toMoney(new Prisma.Decimal(auction.currentPrice).plus(auction.minIncrement)),
+      minimumNextBid: this.toMoney(
+        new Prisma.Decimal(auction.currentPrice).plus(auction.minIncrement),
+      ),
       endsAt: auction.endsAt,
       serverTime: serverTime.toISOString(),
       isWinning: true,
@@ -651,10 +942,21 @@ export class AuctionsService {
     return new Prisma.Decimal(value).toFixed(2);
   }
 
-  private assertVipPermission(tier: AuctionTier, adminUser?: { role?: string; permissions?: string[] }) {
+  private assertVipPermission(
+    tier: AuctionTier,
+    adminUser?: { role?: string; permissions?: string[] },
+  ) {
     if (tier !== AuctionTier.VIP) return;
-    if (adminUser?.role === 'OWNER' || adminUser?.permissions?.includes(PERMISSIONS.AUCTIONS_SET_VIP)) return;
-    throw new AppException('You do not have permission to set an auction as VIP', 'INSUFFICIENT_PERMISSIONS', HttpStatus.FORBIDDEN);
+    if (
+      adminUser?.role === 'OWNER' ||
+      adminUser?.permissions?.includes(PERMISSIONS.AUCTIONS_SET_VIP)
+    )
+      return;
+    throw new AppException(
+      'You do not have permission to set an auction as VIP',
+      'INSUFFICIENT_PERMISSIONS',
+      HttpStatus.FORBIDDEN,
+    );
   }
 
   private audit(adminId: string, action: string, id: string, metadata: unknown, request: Request) {

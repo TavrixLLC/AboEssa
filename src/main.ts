@@ -16,6 +16,10 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const config = app.get(ConfigService);
   const reflector = app.get(Reflector);
+  const expressApp = app.getHttpAdapter().getInstance() as express.Express;
+
+  const trustedProxyHops = config.get<number>('app.trustProxyHops') ?? 0;
+  expressApp.set('trust proxy', trustedProxyHops > 0 ? trustedProxyHops : false);
 
   app.enableShutdownHooks();
   app.use(helmet());
@@ -39,7 +43,10 @@ async function bootstrap() {
 
   const apiPrefix = config.get<string>('app.apiPrefix') ?? 'api';
   app.setGlobalPrefix(apiPrefix, {
-    exclude: [{ path: 'health', method: RequestMethod.GET }],
+    exclude: [
+      { path: 'health', method: RequestMethod.GET },
+      { path: 'ready', method: RequestMethod.GET },
+    ],
   });
 
   app.useGlobalPipes(
@@ -55,12 +62,14 @@ async function bootstrap() {
     new ResponseEnvelopeInterceptor(),
   );
 
-  const document = SwaggerModule.createDocument(app, buildOpenApiConfig());
-  SwaggerModule.setup(`${apiPrefix}/docs`, app, document, {
-    swaggerOptions: {
-      persistAuthorization: true,
-    },
-  });
+  if (config.get<boolean>('app.swaggerEnabled') ?? true) {
+    const document = SwaggerModule.createDocument(app, buildOpenApiConfig());
+    SwaggerModule.setup(`${apiPrefix}/docs`, app, document, {
+      swaggerOptions: {
+        persistAuthorization: false,
+      },
+    });
+  }
 
   const port = config.get<number>('app.port') ?? 3000;
   await app.listen(port, '0.0.0.0');

@@ -1,4 +1,15 @@
-import { Body, Controller, Get, Headers, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { ActorType } from '@prisma/client';
 import {
   ApiBadRequestResponse,
@@ -13,8 +24,14 @@ import {
 } from '@nestjs/swagger';
 import { Request } from 'express';
 import { AuctionsService } from 'src/auctions/auctions.service';
+import { CheckoutDto } from 'src/checkout/dto/checkout.dto';
 import { AuctionQueryDto } from 'src/auctions/dto/auction-query.dto';
-import { AuctionListResponseDto, AuctionResponseDto, BidResponseDto, PlaceBidResultDto } from 'src/auctions/dto/auction-response.dto';
+import {
+  AuctionListResponseDto,
+  AuctionResponseDto,
+  BidResponseDto,
+  PlaceBidResultDto,
+} from 'src/auctions/dto/auction-response.dto';
 import { CreateAuctionDto } from 'src/auctions/dto/create-auction.dto';
 import { PlaceBidDto } from 'src/auctions/dto/place-bid.dto';
 import { UpdateAuctionDto } from 'src/auctions/dto/update-auction.dto';
@@ -46,7 +63,11 @@ export class AuctionsController {
   @Permissions(PERMISSIONS.AUCTIONS_MANAGE)
   @ApiBearerAuth()
   @ApiCreatedResponse({ schema: successEnvelopeSchema(AuctionResponseDto) })
-  create(@Body() dto: CreateAuctionDto, @CurrentUser() user: AuthenticatedUser, @Req() request: Request) {
+  create(
+    @Body() dto: CreateAuctionDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request,
+  ) {
     return this.auctionsService.create(dto, user.id, request, user);
   }
 
@@ -83,7 +104,12 @@ export class AuctionsController {
   @Permissions(PERMISSIONS.AUCTIONS_MANAGE)
   @ApiBearerAuth()
   @ApiOkResponse({ schema: successEnvelopeSchema(AuctionResponseDto) })
-  update(@Param('id') id: string, @Body() dto: UpdateAuctionDto, @CurrentUser() user: AuthenticatedUser, @Req() request: Request) {
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateAuctionDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request,
+  ) {
     return this.auctionsService.update(id, dto, user.id, request, user);
   }
 
@@ -93,7 +119,11 @@ export class AuctionsController {
   @Permissions(PERMISSIONS.AUCTIONS_MANAGE)
   @ApiBearerAuth()
   @ApiCreatedResponse({ schema: successEnvelopeSchema(AuctionResponseDto) })
-  publish(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser, @Req() request: Request) {
+  publish(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request,
+  ) {
     return this.auctionsService.publish(id, user.id, request);
   }
 
@@ -129,6 +159,53 @@ export class AuctionsController {
   @ApiOkResponse({ schema: successEnvelopeSchema(AuctionResponseDto) })
   one(@Param('id') id: string, @CurrentUser() user?: AuthenticatedUser) {
     return this.auctionsService.findOne(id, true, this.customerId(user));
+  }
+
+  @Get('auctions/wins/pending')
+  @UseGuards(JwtAccessGuard)
+  @TokenTypes(TokenType.Customer)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List won auctions awaiting checkout' })
+  pendingWins(@CurrentUser() user: AuthenticatedUser) {
+    return this.auctionsService.pendingWins(user.id);
+  }
+
+  @Post('auctions/:id/checkout')
+  @UseGuards(JwtAccessGuard)
+  @TokenTypes(TokenType.Customer)
+  @ApiBearerAuth()
+  @ApiHeader({ name: 'Idempotency-Key', required: true })
+  @ApiOperation({ summary: 'Choose payment and delivery for a won auction' })
+  async checkoutWonAuction(
+    @Param('id') id: string,
+    @Body() dto: CheckoutDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    const key = this.idempotencyService.requireKey(headers);
+    const endpoint = `${request.method}:${request.path}:${id}`;
+    const requestHash = this.idempotencyService.hashBody(dto);
+    const replay = await this.idempotencyService.getReplayOrThrowConflict({
+      key,
+      actorType: ActorType.CUSTOMER,
+      actorId: user.id,
+      endpoint,
+      requestHash,
+    });
+    if (replay) return replay;
+    const response = await this.auctionsService.checkoutWonAuction(id, user.id, dto, request);
+    await this.idempotencyService.store({
+      key,
+      actorType: ActorType.CUSTOMER,
+      actorId: user.id,
+      endpoint,
+      requestHash,
+      responseJson: response,
+      statusCode: 201,
+      expiresAt: this.idempotencyService.getExpiryDate(),
+    });
+    return response;
   }
 
   @Post('auctions/:id/bids')
@@ -180,7 +257,7 @@ export class AuctionsController {
     if (replay) {
       return replay;
     }
-    const response = await this.auctionsService.placeBid(id, user.id, dto, request);
+    const response = await this.auctionsService.placeBid(id, user.id, dto, request, key);
     await this.idempotencyService.store({
       key,
       actorType: ActorType.CUSTOMER,

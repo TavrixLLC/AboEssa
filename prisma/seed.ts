@@ -85,7 +85,7 @@ async function main() {
     where: { id: 'app_settings_singleton' },
     create: {
       id: 'app_settings_singleton',
-      storeName: process.env.STORE_NAME ?? 'Single Store',
+      storeName: process.env.STORE_NAME ?? 'شناشيل',
       storePhone: process.env.STORE_PHONE,
       storeAddress: process.env.STORE_ADDRESS,
       currency: 'IQD',

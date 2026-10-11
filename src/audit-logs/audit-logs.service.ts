@@ -72,7 +72,12 @@ export class AuditLogsService {
   }
 }
 
-const SENSITIVE_KEYS = new Set(['password', 'passwordHash', 'currentPassword', 'newPassword', 'temporaryPassword', 'otp', 'token', 'accessToken', 'refreshToken', 'refreshTokenHash', 'authorization', 'secret']);
+const SENSITIVE_KEY_PARTS = ['password', 'token', 'authorization', 'credential', 'secret', 'otp', 'cookie'];
+
+const isSensitiveKey = (key: string) => {
+  const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return SENSITIVE_KEY_PARTS.some((part) => normalized.includes(part));
+};
 
 const sanitizeAuditMetadata = (value: Prisma.InputJsonValue | undefined): Prisma.InputJsonValue | undefined => {
   if (value === undefined || value === null) return value;
@@ -80,7 +85,7 @@ const sanitizeAuditMetadata = (value: Prisma.InputJsonValue | undefined): Prisma
   if (typeof value === 'object') {
     const output: Record<string, Prisma.InputJsonValue> = {};
     for (const [key, entry] of Object.entries(value)) {
-      output[key] = SENSITIVE_KEYS.has(key.toLowerCase()) ? '[REDACTED]' : (sanitizeAuditMetadata(entry as Prisma.InputJsonValue) as Prisma.InputJsonValue);
+      output[key] = isSensitiveKey(key) ? '[REDACTED]' : (sanitizeAuditMetadata(entry as Prisma.InputJsonValue) as Prisma.InputJsonValue);
     }
     return output;
   }

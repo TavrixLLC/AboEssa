@@ -17,6 +17,7 @@ import { AppException } from 'src/common/exceptions/app.exception';
 import { AuthenticatedUser, JwtAccessPayload } from 'src/common/types/authenticated-user.interface';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { PermissionResolverService } from 'src/permissions/permission-resolver.service';
+import { PasswordService } from 'src/common/security/password.service';
 
 @Injectable()
 export class JwtAccessGuard implements CanActivate {
@@ -25,6 +26,7 @@ export class JwtAccessGuard implements CanActivate {
     private readonly jwtService: JwtService,
     private readonly prisma: PrismaService,
     private readonly permissionResolver: PermissionResolverService,
+    private readonly passwordService: PasswordService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -46,16 +48,27 @@ export class JwtAccessGuard implements CanActivate {
     ]);
 
     if (allowedTypes?.length && !allowedTypes.includes(payload.type)) {
-      throw new AppException('Token type is not allowed for this endpoint', 'TOKEN_TYPE_FORBIDDEN', HttpStatus.FORBIDDEN);
+      throw new AppException(
+        'Token type is not allowed for this endpoint',
+        'TOKEN_TYPE_FORBIDDEN',
+        HttpStatus.FORBIDDEN,
+      );
     }
 
-    request.user = await this.resolveUser(payload);
+    request.user = await this.resolveUser(payload, token);
     if (
       request.user.type === TokenType.Admin &&
       request.user.mustChangePassword &&
-      !this.reflector.getAllAndOverride<boolean>(ALLOW_MANDATORY_PASSWORD_CHANGE, [context.getHandler(), context.getClass()])
+      !this.reflector.getAllAndOverride<boolean>(ALLOW_MANDATORY_PASSWORD_CHANGE, [
+        context.getHandler(),
+        context.getClass(),
+      ])
     ) {
-      throw new AppException('Password change is required before using administrative endpoints', 'STAFF_MUST_CHANGE_PASSWORD', HttpStatus.FORBIDDEN);
+      throw new AppException(
+        'Password change is required before using administrative endpoints',
+        'STAFF_MUST_CHANGE_PASSWORD',
+        HttpStatus.FORBIDDEN,
+      );
     }
     return true;
   }
@@ -73,13 +86,19 @@ export class JwtAccessGuard implements CanActivate {
     const untrusted = this.isPartialJwtAccessPayload(decoded) ? decoded : undefined;
     const secret = this.getSecretForType(untrusted?.type);
     if (!secret) {
-      throw new UnauthorizedException({ message: 'Invalid token type', code: 'INVALID_TOKEN_TYPE' });
+      throw new UnauthorizedException({
+        message: 'Invalid token type',
+        code: 'INVALID_TOKEN_TYPE',
+      });
     }
 
     try {
       return await this.jwtService.verifyAsync<JwtAccessPayload>(token, { secret });
     } catch {
-      throw new UnauthorizedException({ message: 'Invalid or expired token', code: 'INVALID_TOKEN' });
+      throw new UnauthorizedException({
+        message: 'Invalid or expired token',
+        code: 'INVALID_TOKEN',
+      });
     }
   }
 
@@ -100,19 +119,35 @@ export class JwtAccessGuard implements CanActivate {
     return undefined;
   }
 
-  private async resolveUser(payload: JwtAccessPayload): Promise<AuthenticatedUser> {
+  private async resolveUser(payload: JwtAccessPayload, token: string): Promise<AuthenticatedUser> {
     if (payload.type === TokenType.Admin) {
       const admin = await this.prisma.adminUser.findUnique({ where: { id: payload.sub } });
       if (!admin || !admin.isActive || admin.status !== 'ACTIVE') {
-        throw new UnauthorizedException({ message: 'Admin account is inactive or locked', code: admin?.status === 'LOCKED' ? 'STAFF_LOCKED' : 'ADMIN_INACTIVE' });
+        throw new UnauthorizedException({
+          message: 'Admin account is inactive or locked',
+          code: admin?.status === 'LOCKED' ? 'STAFF_LOCKED' : 'ADMIN_INACTIVE',
+        });
       }
       if (payload.tokenVersion !== admin.tokenVersion) {
-        throw new UnauthorizedException({ message: 'Token has been revoked', code: 'TOKEN_REVOKED' });
+        throw new UnauthorizedException({
+          message: 'Token has been revoked',
+          code: 'TOKEN_REVOKED',
+        });
       }
       if (payload.sessionId) {
-        const session = await this.prisma.adminSession.findFirst({ where: { id: payload.sessionId, adminUserId: admin.id, revokedAt: null, expiresAt: { gt: new Date() } } });
+        const session = await this.prisma.adminSession.findFirst({
+          where: {
+            id: payload.sessionId,
+            adminUserId: admin.id,
+            revokedAt: null,
+            expiresAt: { gt: new Date() },
+          },
+        });
         if (!session) {
-          throw new UnauthorizedException({ message: 'Session has been revoked', code: 'SESSION_REVOKED' });
+          throw new UnauthorizedException({
+            message: 'Session has been revoked',
+            code: 'SESSION_REVOKED',
+          });
         }
       }
       return {
@@ -120,7 +155,10 @@ export class JwtAccessGuard implements CanActivate {
         type: TokenType.Admin,
         actorType: ActorType.ADMIN,
         role: admin.role,
-        permissions: admin.role === AdminRole.OWNER || admin.isOwner ? undefined : await this.permissionResolver.forAdmin(admin.id),
+        permissions:
+          admin.role === AdminRole.OWNER || admin.isOwner
+            ? undefined
+            : await this.permissionResolver.forAdmin(admin.id),
         tokenVersion: admin.tokenVersion,
         sessionId: payload.sessionId,
         isOwner: admin.isOwner || admin.role === AdminRole.OWNER,
@@ -132,7 +170,10 @@ export class JwtAccessGuard implements CanActivate {
     if (payload.type === TokenType.Customer) {
       const customer = await this.prisma.customer.findUnique({ where: { id: payload.sub } });
       if (!customer || customer.status === CustomerStatus.BLOCKED) {
-        throw new UnauthorizedException({ message: 'Customer account is blocked', code: 'CUSTOMER_BLOCKED' });
+        throw new UnauthorizedException({
+          message: 'Customer account is blocked',
+          code: 'CUSTOMER_BLOCKED',
+        });
       }
       return {
         id: customer.id,
@@ -146,9 +187,14 @@ export class JwtAccessGuard implements CanActivate {
       !screen ||
       !screen.isActive ||
       screen.status !== ScreenStatus.ACTIVE ||
-      payload.tokenVersion !== screen.tokenVersion
+      payload.tokenVersion !== screen.tokenVersion ||
+      screen.tokenHash === 'pending-pairing-delivery' ||
+      !(await this.passwordService.verify(screen.tokenHash, token))
     ) {
-      throw new UnauthorizedException({ message: 'Screen token has been revoked', code: 'SCREEN_REVOKED' });
+      throw new UnauthorizedException({
+        message: 'Screen token has been revoked',
+        code: 'SCREEN_REVOKED',
+      });
     }
 
     return {

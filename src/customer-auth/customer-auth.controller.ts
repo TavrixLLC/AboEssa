@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
@@ -10,28 +10,32 @@ import { TokenType } from 'src/common/enums/token-type.enum';
 import { JwtAccessGuard } from 'src/common/guards/jwt-access.guard';
 import { AuthenticatedUser } from 'src/common/types/authenticated-user.interface';
 import { CustomerAuthService } from 'src/customer-auth/customer-auth.service';
-import { RequestOtpDto } from 'src/customer-auth/dto/request-otp.dto';
-import { VerifyOtpDto } from 'src/customer-auth/dto/verify-otp.dto';
+import { CustomerLoginDto } from 'src/customer-auth/dto/customer-login.dto';
+import { CustomerRegisterDto } from 'src/customer-auth/dto/customer-register.dto';
+import {
+  DeleteCustomerAccountDto,
+  PublicDeleteCustomerAccountDto,
+} from 'src/customer-auth/dto/delete-customer-account.dto';
 
 @ApiTags('Customer auth')
 @Controller('auth/customer')
 export class CustomerAuthController {
   constructor(private readonly customerAuthService: CustomerAuthService) {}
 
-  @Post('request-otp')
+  @Post('register')
   @Public()
-  @Throttle({ default: { limit: 3, ttl: 60_000 } })
-  @ApiOperation({ summary: 'Request WhatsApp OTP for customer login' })
-  requestOtp(@Body() dto: RequestOtpDto, @Req() request: Request) {
-    return this.customerAuthService.requestOtp(dto, request);
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Create a customer account with phone and password' })
+  register(@Body() dto: CustomerRegisterDto, @Req() request: Request) {
+    return this.customerAuthService.register(dto, request);
   }
 
-  @Post('verify-otp')
+  @Post('login')
   @Public()
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  @ApiOperation({ summary: 'Verify OTP and login or claim virtual customer account' })
-  verifyOtp(@Body() dto: VerifyOtpDto, @Req() request: Request) {
-    return this.customerAuthService.verifyOtp(dto, request);
+  @ApiOperation({ summary: 'Customer login with phone and password' })
+  login(@Body() dto: CustomerLoginDto, @Req() request: Request) {
+    return this.customerAuthService.login(dto, request);
   }
 
   @Post('refresh')
@@ -54,5 +58,29 @@ export class CustomerAuthController {
   @ApiBearerAuth()
   me(@CurrentUser() user: AuthenticatedUser) {
     return this.customerAuthService.me(user.id);
+  }
+
+  @Post('delete-account')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAccessGuard)
+  @TokenTypes(TokenType.Customer)
+  @ApiBearerAuth()
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Permanently delete the authenticated customer account' })
+  deleteAccount(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: DeleteCustomerAccountDto,
+    @Req() request: Request,
+  ) {
+    return this.customerAuthService.deleteAccount(user.id, dto.password, request);
+  }
+
+  @Post('delete-account-request')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Delete a customer account from the public web resource' })
+  deleteAccountFromWeb(@Body() dto: PublicDeleteCustomerAccountDto, @Req() request: Request) {
+    return this.customerAuthService.deleteAccountFromWeb(dto.phone, dto.password, request);
   }
 }

@@ -94,13 +94,25 @@ export class WarehouseService {
   async printLabel(orderItemId: string, adminId: string) {
     const item = await this.prisma.orderItem.findUnique({ where: { id: orderItemId } });
     if (!item) {
-      throw new AppException('Order item was not found', 'ORDER_ITEM_NOT_FOUND', HttpStatus.NOT_FOUND);
+      throw new AppException(
+        'Order item was not found',
+        'ORDER_ITEM_NOT_FOUND',
+        HttpStatus.NOT_FOUND,
+      );
     }
     if (item.status === OrderItemStatus.CANCELLED) {
-      throw new AppException('Cancelled item cannot be printed', 'ORDER_ITEM_CANCELLED', HttpStatus.CONFLICT);
+      throw new AppException(
+        'Cancelled item cannot be printed',
+        'ORDER_ITEM_CANCELLED',
+        HttpStatus.CONFLICT,
+      );
     }
     if (item.labelStatus === LabelStatus.ATTACHED) {
-      throw new AppException('Label is already attached', 'LABEL_ALREADY_ATTACHED', HttpStatus.CONFLICT);
+      throw new AppException(
+        'Label is already attached',
+        'LABEL_ALREADY_ATTACHED',
+        HttpStatus.CONFLICT,
+      );
     }
 
     const job = await this.labelsService.createPrintJob(orderItemId, adminId);
@@ -178,17 +190,27 @@ export class WarehouseService {
 
     const items = await Promise.all(
       boxes.map(async (box) => {
-        const [pendingLabelsCount, attachedLabelsCount, shippingRequestedCount] = await Promise.all([
-          this.prisma.orderItem.count({
-            where: { customerId: box.customerId, labelStatus: LabelStatus.PENDING, status: { in: boxItemStatuses } },
-          }),
-          this.prisma.orderItem.count({
-            where: { customerId: box.customerId, labelStatus: LabelStatus.ATTACHED, status: { in: boxItemStatuses } },
-          }),
-          this.prisma.orderItem.count({
-            where: { customerId: box.customerId, status: OrderItemStatus.SHIPPING_REQUESTED },
-          }),
-        ]);
+        const [pendingLabelsCount, attachedLabelsCount, shippingRequestedCount] = await Promise.all(
+          [
+            this.prisma.orderItem.count({
+              where: {
+                customerId: box.customerId,
+                labelStatus: LabelStatus.PENDING,
+                status: { in: boxItemStatuses },
+              },
+            }),
+            this.prisma.orderItem.count({
+              where: {
+                customerId: box.customerId,
+                labelStatus: LabelStatus.ATTACHED,
+                status: { in: boxItemStatuses },
+              },
+            }),
+            this.prisma.orderItem.count({
+              where: { customerId: box.customerId, status: OrderItemStatus.SHIPPING_REQUESTED },
+            }),
+          ],
+        );
 
         return {
           customer: {
@@ -224,7 +246,11 @@ export class WarehouseService {
           customerId,
           status: { in: boxItemStatuses },
         },
-        include: { category: true, order: true, printJobs: { orderBy: { createdAt: 'desc' }, take: 1 } },
+        include: {
+          category: true,
+          order: true,
+          printJobs: { orderBy: { createdAt: 'desc' }, take: 1 },
+        },
         orderBy: { soldAt: 'desc' },
       }),
     ]);
@@ -241,7 +267,8 @@ export class WarehouseService {
       items,
       summary: {
         pendingLabelsCount: items.filter((item) => item.labelStatus === LabelStatus.PENDING).length,
-        attachedLabelsCount: items.filter((item) => item.labelStatus === LabelStatus.ATTACHED).length,
+        attachedLabelsCount: items.filter((item) => item.labelStatus === LabelStatus.ATTACHED)
+          .length,
         totalAmount: box.totalAmount,
         totalItems: box.totalItems,
       },
@@ -250,7 +277,11 @@ export class WarehouseService {
 
   async searchItems(query: ItemSearchQueryDto, adminId: string) {
     if (!query.barcode && !query.search) {
-      throw new AppException('barcode or search is required', 'BAD_REQUEST', HttpStatus.BAD_REQUEST);
+      throw new AppException(
+        'barcode or search is required',
+        'BAD_REQUEST',
+        HttpStatus.BAD_REQUEST,
+      );
     }
 
     const item = await this.prisma.orderItem.findFirst({
@@ -289,7 +320,7 @@ export class WarehouseService {
       where: { id: APP_SETTINGS_ID },
       create: {
         id: APP_SETTINGS_ID,
-        storeName: 'Single Store',
+        storeName: 'شناشيل',
         currency: 'IQD',
         labelTemplate: {},
       },
@@ -297,4 +328,3 @@ export class WarehouseService {
     });
   }
 }
-

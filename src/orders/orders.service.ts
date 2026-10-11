@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { LabelStatus, OrderItemStatus, OrderStatus, Prisma } from '@prisma/client';
+import { CheckoutStatus, LabelStatus, OrderItemStatus, OrderStatus, Prisma } from '@prisma/client';
 import { getPagination, toPaginatedResult } from 'src/common/pagination/pagination.dto';
 import { CustomerOrderItemsQueryDto } from 'src/order-items/dto/customer-order-items-query.dto';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -10,6 +10,10 @@ const visibleCustomerItemStatuses = [
   OrderItemStatus.SHIPPING_REQUESTED,
   OrderItemStatus.PACKED,
 ];
+
+const confirmedCheckoutWhere: Prisma.OrderItemWhereInput = {
+  OR: [{ checkoutStatus: null }, { checkoutStatus: { not: CheckoutStatus.AWAITING_SELECTION } }],
+};
 
 @Injectable()
 export class OrdersService {
@@ -27,6 +31,7 @@ export class OrdersService {
         where: {
           customerId,
           status: { in: visibleCustomerItemStatuses },
+          ...confirmedCheckoutWhere,
         },
         include: { category: true, order: true },
         orderBy: { soldAt: 'desc' },
@@ -57,6 +62,7 @@ export class OrdersService {
       customerId,
       status: query.status ?? { in: visibleCustomerItemStatuses },
       source: query.source,
+      ...confirmedCheckoutWhere,
       soldAt:
         query.from || query.to
           ? {
@@ -85,9 +91,11 @@ export class OrdersService {
       where: {
         customerId,
         status: { not: OrderStatus.CANCELLED },
+        items: { some: confirmedCheckoutWhere },
       },
       include: {
         items: {
+          where: confirmedCheckoutWhere,
           include: { category: true },
           orderBy: { soldAt: 'desc' },
         },
@@ -96,4 +104,3 @@ export class OrdersService {
     });
   }
 }
-
