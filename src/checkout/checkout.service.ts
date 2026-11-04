@@ -10,7 +10,7 @@ import {
 } from '@prisma/client';
 import { CheckoutDeliveryDto } from 'src/checkout/dto/checkout.dto';
 import { AppException } from 'src/common/exceptions/app.exception';
-import { normalizePhone } from 'src/common/utils/phone.util';
+import { deliveryAddress } from 'src/checkout/delivery-address';
 import { WalletService } from 'src/wallet/wallet.service';
 
 type CompleteCheckoutInput = {
@@ -19,7 +19,10 @@ type CompleteCheckoutInput = {
   itemIds: string[];
   totalAmount: Prisma.Decimal;
   paymentMethod: CheckoutPaymentMethod;
-  delivery: CheckoutDeliveryDto;
+  delivery?: CheckoutDeliveryDto;
+  // Internal-only option for automatically confirmed auction wins. Customers
+  // must provide the missing address before the order can be shipped.
+  allowMissingDelivery?: boolean;
   referenceId: string;
   eventKey: string;
   bidHold?: { bidId: string; amount: Prisma.Decimal };
@@ -67,29 +70,14 @@ export class CheckoutService {
       );
     }
 
-    const phone = normalizePhone(input.delivery.phone);
-    if (!/^\+?[0-9]{10,15}$/.test(phone)) {
-      throw new AppException(
-        'Invalid delivery phone',
-        'INVALID_DELIVERY_PHONE',
-        HttpStatus.BAD_REQUEST,
-      );
-    }
-    const delivery = {
-      fullName: input.delivery.fullName.trim(),
-      phone,
-      governorate: input.delivery.governorate.trim(),
-      city: input.delivery.city.trim(),
-      addressLine: input.delivery.addressLine.trim(),
-      nearestPoint: input.delivery.nearestPoint?.trim() || null,
-    };
-    if (!delivery.fullName || !delivery.governorate || !delivery.city || !delivery.addressLine) {
+    if (!input.delivery && !input.allowMissingDelivery) {
       throw new AppException(
         'Delivery address is required',
         'DELIVERY_ADDRESS_REQUIRED',
         HttpStatus.BAD_REQUEST,
       );
     }
+    const delivery = input.delivery ? deliveryAddress(input.delivery) : null;
 
     const deposit = this.depositFor(input.totalAmount);
     let walletPaid: Prisma.Decimal;
@@ -161,8 +149,8 @@ export class CheckoutService {
             paymentMethod: input.paymentMethod,
             walletPaidAmount: itemPaid,
             cashDueAmount: new Prisma.Decimal(items[index].price).minus(itemPaid),
-            deliveryAddressSnapshot: delivery,
-            deliveryPhone: phone,
+            deliveryAddressSnapshot: delivery ?? Prisma.DbNull,
+            deliveryPhone: delivery?.phone ?? null,
             checkoutConfirmedAt: new Date(),
             status: OrderItemStatus.SHIPPING_REQUESTED,
           },
@@ -181,7 +169,7 @@ export class CheckoutService {
         paymentMethod: input.paymentMethod,
         walletPaidAmount: walletPaid,
         cashDueAmount: cashDue,
-        addressSnapshot: delivery,
+        addressSnapshot: delivery ?? Prisma.DbNull,
         status: ShippingRequestStatus.REQUESTED,
       },
     });

@@ -580,6 +580,8 @@ describe('AuctionsService mobile contract', () => {
         }),
       },
       orderItem: { update: jest.fn().mockResolvedValue({}) },
+      customerAddress: { findFirst: jest.fn().mockResolvedValue(null) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
     const prisma = {
       $transaction: jest
@@ -608,10 +610,15 @@ describe('AuctionsService mobile contract', () => {
       },
     };
     const notifications = { createForCustomer: jest.fn().mockResolvedValue({}) };
-    const sockets = { emitToAdmins: jest.fn(), emitToCustomers: jest.fn() };
+    const sockets = {
+      emitToAdmins: jest.fn(),
+      emitToCustomers: jest.fn(),
+      emitToCustomer: jest.fn(),
+    };
     const queue = { add: jest.fn().mockResolvedValue({}) };
     const sales = {
       createSoldItemInTransaction: jest.fn().mockResolvedValue({
+        order: { id: 'order-auction-1' },
         items: [
           {
             id: 'item-auction-1',
@@ -634,6 +641,8 @@ describe('AuctionsService mobile contract', () => {
         shipmentRequest: { id: 'shipment-request-1' },
         walletPaid: new Prisma.Decimal('1500'),
         cashDue: new Prisma.Decimal(0),
+        updatedItems: [{ id: 'item-auction-1', orderId: 'order-auction-1' }],
+        updatedOrder: { id: 'order-auction-1' },
       }),
     };
     const service = new AuctionsService(
@@ -646,7 +655,7 @@ describe('AuctionsService mobile contract', () => {
       wallet as any,
       checkout as any,
     );
-    return { service, prisma, sockets, tx, wallet, sales, checkout };
+    return { service, prisma, sockets, tx, wallet, sales, checkout, queue };
   }
 
   it('auction list includes serverTime and minimumNextBid', async () => {
@@ -662,6 +671,18 @@ describe('AuctionsService mobile contract', () => {
       bidDepositPercent: 10,
       myHighestBid: '1500.00',
       isWinning: true,
+    });
+  });
+
+  it('an extended auction gets a distinct retryable close job rather than reusing the running job id', async () => {
+    const { service, queue } = makeService();
+    const end = new Date(Date.now() + 10000);
+    await service.scheduleClose('auction-1', end);
+    await service.scheduleClose('auction-1', new Date(end.getTime() + 30000));
+    expect(queue.add.mock.calls[0][2].jobId).not.toBe(queue.add.mock.calls[1][2].jobId);
+    expect(queue.add.mock.calls[1][2]).toMatchObject({
+      attempts: 5,
+      backoff: { type: 'exponential', delay: 1000 },
     });
   });
 
@@ -787,8 +808,8 @@ describe('AuctionsService mobile contract', () => {
     expect(response.isOutbid).toBe(false);
   });
 
-  it('keeps the winning deposit reserved and does not create an order until checkout', async () => {
-    const { service, wallet, sales, tx } = makeService({
+  it('automatically confirms a COD order and settles its winning deposit even without an address', async () => {
+    const { service, checkout, sales, tx } = makeService({
       endsAt: new Date(Date.now() - 1000),
       winningBid: {
         id: 'bid-1',
@@ -798,14 +819,23 @@ describe('AuctionsService mobile contract', () => {
       },
     });
     await service.closeAuction('auction-1');
-    expect(wallet.settleBid).not.toHaveBeenCalled();
-    expect(sales.createSoldItemInTransaction).not.toHaveBeenCalled();
-    expect(tx.orderItem.update).not.toHaveBeenCalled();
+    expect(sales.createSoldItemInTransaction).toHaveBeenCalledTimes(1);
+    expect(checkout.complete).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        paymentMethod: 'CASH_ON_DELIVERY',
+        orderId: 'order-auction-1',
+        allowMissingDelivery: true,
+        delivery: undefined,
+        bidHold: { bidId: 'bid-1', amount: new Prisma.Decimal('1500') },
+      }),
+    );
     expect(tx.auction.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: {
           status: AuctionStatus.ENDED,
           winnerCustomerId: 'customer-1',
+          soldOrderItemId: 'item-auction-1',
         },
       }),
     );

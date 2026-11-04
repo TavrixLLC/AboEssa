@@ -55,6 +55,8 @@ export type CreateSoldItemInput = {
   initialLabelStatus?: LabelStatus;
   isQuickSale?: boolean;
   dedicatedOrder?: boolean;
+  // Internal settlement of a bid placed before an account was blocked.
+  fulfillExistingCommitment?: boolean;
 };
 
 export type SaleResult = {
@@ -192,7 +194,7 @@ export class SalesService {
     if (!customer) {
       throw new AppException('Customer was not found', 'CUSTOMER_NOT_FOUND', HttpStatus.NOT_FOUND);
     }
-    if (customer.status === CustomerStatus.BLOCKED) {
+    if (customer.status === CustomerStatus.BLOCKED && !input.fulfillExistingCommitment) {
       throw new AppException(
         'Customer account is blocked',
         'CUSTOMER_BLOCKED',

@@ -1,8 +1,8 @@
-import { CheckoutStatus, OrderStatus } from '@prisma/client';
+import { CheckoutStatus } from '@prisma/client';
 import { OrdersService } from 'src/orders/orders.service';
 
 describe('OrdersService checkout visibility', () => {
-  it('hides auction wins until the customer confirms payment and delivery', async () => {
+  it('includes automatically confirmed and cancelled orders, but hides legacy incomplete checkouts', async () => {
     const prisma = {
       order: { findMany: jest.fn().mockResolvedValue([]) },
     };
@@ -19,7 +19,6 @@ describe('OrdersService checkout visibility', () => {
     expect(prisma.order.findMany).toHaveBeenCalledWith({
       where: {
         customerId: 'customer-1',
-        status: { not: OrderStatus.CANCELLED },
         items: { some: confirmedCheckoutWhere },
       },
       include: {

@@ -1,4 +1,7 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Request } from 'express';
+import { CheckoutDeliveryDto } from 'src/checkout/dto/checkout.dto';
+import { OrderActionsService } from 'src/orders/order-actions.service';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { TokenTypes } from 'src/common/decorators/token-type.decorator';
@@ -14,7 +17,31 @@ import { OrdersService } from 'src/orders/orders.service';
 @UseGuards(JwtAccessGuard)
 @TokenTypes(TokenType.Customer)
 export class OrdersController {
-  constructor(private readonly ordersService: OrdersService) {}
+  constructor(
+    private readonly ordersService: OrdersService,
+    private readonly actions: OrderActionsService,
+  ) {}
+
+  @Post('orders/:id/pay-wallet')
+  @ApiOperation({ summary: 'Pay the outstanding amount of a confirmed order from my wallet' })
+  payWallet(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Req() request: Request,
+  ) {
+    return this.actions.payWithWallet(user.id, id, request);
+  }
+
+  @Patch('orders/:id/delivery')
+  @ApiOperation({ summary: 'Complete delivery details without confirming an order again' })
+  updateDelivery(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: CheckoutDeliveryDto,
+    @Req() request: Request,
+  ) {
+    return this.actions.updateDelivery(user.id, id, dto, request);
+  }
 
   @Get('box')
   @ApiOperation({ summary: 'Get authenticated customer warehouse box' })
@@ -34,4 +61,3 @@ export class OrdersController {
     return this.ordersService.customerOrders(user.id);
   }
 }
-

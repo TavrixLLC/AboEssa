@@ -90,7 +90,6 @@ export class OrdersService {
     return this.prisma.order.findMany({
       where: {
         customerId,
-        status: { not: OrderStatus.CANCELLED },
         items: { some: confirmedCheckoutWhere },
       },
       include: {

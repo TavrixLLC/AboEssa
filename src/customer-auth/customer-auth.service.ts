@@ -131,7 +131,11 @@ export class CustomerAuthService {
     }
 
     const customer = await this.prisma.customer.findUnique({ where: { id: customerId } });
-    if (!customer?.refreshTokenHash || customer.status === CustomerStatus.BLOCKED || customer.deletedAt) {
+    if (
+      !customer?.refreshTokenHash ||
+      customer.status === CustomerStatus.BLOCKED ||
+      customer.deletedAt
+    ) {
       throw new AppException(
         'Invalid refresh token',
         'INVALID_REFRESH_TOKEN',
@@ -218,16 +222,14 @@ export class CustomerAuthService {
   }
 
   async deleteAccount(customerId: string, password: string, request: Request) {
-    const customer = await this.prisma.customer.findUnique({ where: { id: customerId } });
-    await this.assertDeletionCredentials(customer, password);
-    return this.eraseCustomerAccount(customerId, request);
+    return this.eraseCustomerAccount(customerId, password, request);
   }
 
   async deleteAccountFromWeb(rawPhone: string, password: string, request: Request) {
     const phone = this.validPhone(rawPhone);
     const customer = await this.prisma.customer.findUnique({ where: { phone } });
-    await this.assertDeletionCredentials(customer, password);
-    return this.eraseCustomerAccount(customer!.id, request);
+    if (!customer) await this.assertDeletionCredentials(null, password);
+    return this.eraseCustomerAccount(customer!.id, password, request);
   }
 
   private async assertDeletionCredentials(
@@ -246,9 +248,14 @@ export class CustomerAuthService {
     }
   }
 
-  private async eraseCustomerAccount(customerId: string, request: Request) {
+  private async eraseCustomerAccount(customerId: string, password: string, _request: Request) {
     const deletedAt = new Date();
     await this.prisma.$transaction(async (tx) => {
+      // Serialize deletion/password updates and re-check credentials inside
+      // the transaction. Never erase using a stale account snapshot.
+      await tx.$queryRaw`SELECT "id" FROM "Customer" WHERE "id" = ${customerId} FOR UPDATE`;
+      const customer = await tx.customer.findUnique({ where: { id: customerId } });
+      await this.assertDeletionCredentials(customer, password);
       await tx.notification.deleteMany({ where: { customerId } });
       await tx.customerDevice.deleteMany({ where: { customerId } });
       await tx.customerNotificationSettings.deleteMany({ where: { customerId } });
@@ -261,7 +268,12 @@ export class CustomerAuthService {
         where: { actorType: ActorType.CUSTOMER, actorId: customerId },
       });
       await tx.auditLog.deleteMany({
-        where: { actorType: ActorType.CUSTOMER, actorId: customerId },
+        where: {
+          OR: [
+            { actorType: ActorType.CUSTOMER, actorId: customerId },
+            { entityType: 'Customer', entityId: customerId },
+          ],
+        },
       });
       await tx.bid.updateMany({
         where: { customerId },
@@ -269,7 +281,15 @@ export class CustomerAuthService {
       });
       await tx.shipmentRequest.updateMany({
         where: { customerId },
-        data: { addressSnapshot: Prisma.DbNull, customerNote: null },
+        data: { addressSnapshot: Prisma.DbNull, customerNote: null, adminNote: null },
+      });
+      await tx.orderItem.updateMany({
+        where: { customerId },
+        data: { deliveryAddressSnapshot: Prisma.DbNull, deliveryPhone: null },
+      });
+      await tx.order.updateMany({
+        where: { customerId },
+        data: { notes: null },
       });
       await tx.customer.update({
         where: { id: customerId },
@@ -293,21 +313,23 @@ export class CustomerAuthService {
           deletedAt,
         },
       });
-    });
-
-    await this.auditLogs.create({
-      actorType: ActorType.SYSTEM,
-      action: 'customer.account_deleted',
-      entityType: 'Customer',
-      summary: 'Customer account personal data erased',
-      ip: request.ip,
-      userAgent: request.headers['user-agent'],
+      // Commit the receipt with the erasure; do not return a 500 after deleting
+      // an account because a separate, post-commit audit write failed.
+      await tx.auditLog.create({
+        data: {
+          actorType: ActorType.SYSTEM,
+          action: 'customer.account_deleted',
+          entityType: 'Customer',
+          summary: 'Customer account personal data erased',
+        },
+      });
     });
 
     return {
       deleted: true,
       deletedAt,
-      retainedData: 'Anonymized transaction records required for accounting, security, and fraud prevention',
+      retainedData:
+        'Anonymized transaction records required for accounting, security, and fraud prevention',
     };
   }
 

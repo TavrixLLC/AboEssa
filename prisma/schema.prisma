@@ -42,6 +42,7 @@ enum WalletEntryType {
   BID_SETTLEMENT
   TEST_CREDIT
   COD_DEPOSIT
+  REFUND
 }
 
 enum CheckoutPaymentMethod {

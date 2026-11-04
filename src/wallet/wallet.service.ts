@@ -63,6 +63,22 @@ export class WalletService {
     await this.move(tx, customerId, amount, WalletEntryType.COD_DEPOSIT, orderItemId, eventKey);
   }
 
+  async refundPurchase(
+    tx: Prisma.TransactionClient,
+    customerId: string,
+    amount: Prisma.Decimal,
+    orderId: string,
+  ) {
+    await this.move(
+      tx,
+      customerId,
+      amount,
+      WalletEntryType.REFUND,
+      orderId,
+      `order-refund:${orderId}`,
+    );
+  }
+
   async reserveBid(
     tx: Prisma.TransactionClient,
     customerId: string,
@@ -127,9 +143,11 @@ export class WalletService {
     const updated = await tx.customerWallet.updateMany({
       where: {
         customerId,
-        ...(spendsAvailable
-          ? { availableBalance: { gte: amount } }
-          : { reservedBalance: { gte: amount } }),
+        ...(type === WalletEntryType.REFUND
+          ? {}
+          : spendsAvailable
+            ? { availableBalance: { gte: amount } }
+            : { reservedBalance: { gte: amount } }),
       },
       data: {
         availableBalance:
@@ -137,7 +155,7 @@ export class WalletService {
           type === WalletEntryType.COD_DEPOSIT ||
           type === WalletEntryType.BID_HOLD
             ? { decrement: amount }
-            : type === WalletEntryType.BID_RELEASE
+            : type === WalletEntryType.BID_RELEASE || type === WalletEntryType.REFUND
               ? { increment: amount }
               : undefined,
         reservedBalance:

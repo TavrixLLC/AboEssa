@@ -5,6 +5,7 @@ import {
   AuctionStatus,
   AuctionTier,
   BidStatus,
+  CheckoutPaymentMethod,
   CheckoutStatus,
   CustomerStatus,
   LabelStatus,
@@ -17,6 +18,7 @@ import { Request } from 'express';
 import { AuditLogsService } from 'src/audit-logs/audit-logs.service';
 import { CheckoutService } from 'src/checkout/checkout.service';
 import { CheckoutDto } from 'src/checkout/dto/checkout.dto';
+import { hasDeliveryAddress } from 'src/checkout/delivery-address';
 import { AUCTION_CLOSE_QUEUE } from 'src/auctions/auction-queue.constants';
 import {
   legacyAdminAuctionRarity,
@@ -513,9 +515,66 @@ export class AuctionsService {
           return { auction: ended, sale: null };
         }
 
+        const winnerId = auction.winningBid.customerId;
+        const address = await tx.customerAddress.findFirst({
+          where: { customerId: winnerId, isActive: true },
+          orderBy: [{ isDefault: 'desc' }, { updatedAt: 'desc' }, { id: 'asc' }],
+        });
+        const saleInput = {
+          customerId: winnerId,
+          categoryId: auction.categoryId,
+          auctionId: auction.id,
+          source: SaleSource.APP_AUCTION,
+          price: auction.currentPrice,
+          title: auction.title,
+          description: auction.description ?? undefined,
+          imageUrl: auction.imageUrls[0],
+          shouldCreatePrintJob: false,
+          initialLabelStatus: LabelStatus.PENDING,
+          dedicatedOrder: true,
+          fulfillExistingCommitment: true,
+        };
+        const sale = await this.salesService.createSoldItemInTransaction(tx, saleInput);
+        const checkout = await this.checkout.complete(tx, {
+          customerId: winnerId,
+          orderId: sale.items[0].orderId,
+          itemIds: sale.items.map((item) => item.id),
+          totalAmount: new Prisma.Decimal(auction.currentPrice),
+          paymentMethod: CheckoutPaymentMethod.CASH_ON_DELIVERY,
+          delivery:
+            address && hasDeliveryAddress(address)
+              ? { ...address, nearestPoint: address.nearestPoint ?? undefined }
+              : undefined,
+          allowMissingDelivery: true,
+          referenceId: sale.items[0].id,
+          eventKey: `auction-auto-checkout:${auction.id}:${winnerId}`,
+          // Pre-wallet legacy bids are never charged retroactively.
+          bidHold: auction.winningBid.walletReserved
+            ? {
+                bidId: auction.winningBid.id,
+                amount: auction.winningBid.reservedAmount ?? auction.winningBid.amount,
+              }
+            : undefined,
+        });
+
+        await tx.auditLog.create({
+          data: {
+            actorType: ActorType.SYSTEM,
+            action: 'order.auto_confirmed_from_auction',
+            entityType: 'Order',
+            entityId: sale.order.id,
+            metadata: {
+              auctionId,
+              bidId: auction.winningBid.id,
+              walletPaid: checkout.walletPaid.toFixed(2),
+              cashDue: checkout.cashDue.toFixed(2),
+            },
+          },
+        });
+
         await tx.bid.update({
           where: { id: auction.winningBid.id },
-          data: { status: BidStatus.WON },
+          data: { status: BidStatus.WON, walletReserved: false },
         });
         await tx.bid.updateMany({
           where: {
@@ -531,9 +590,16 @@ export class AuctionsService {
           data: {
             status: AuctionStatus.ENDED,
             winnerCustomerId: auction.winningBid.customerId,
+            soldOrderItemId: sale.items[0].id,
           },
         });
-        return { auction: ended, sale: null, bids: auction.bids };
+        return {
+          auction: ended,
+          sale: { ...sale, items: checkout.updatedItems, order: checkout.updatedOrder },
+          saleInput,
+          checkout,
+          bids: auction.bids,
+        };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
@@ -545,12 +611,25 @@ export class AuctionsService {
 
     if (closeResult.bids && closeResult.auction?.winnerCustomerId) {
       const winnerCustomerId = closeResult.auction.winnerCustomerId;
+      if (closeResult.sale && closeResult.saleInput) {
+        await this.salesService.recordSoldItemSideEffects(
+          closeResult.saleInput,
+          closeResult.sale,
+          { actorType: ActorType.SYSTEM },
+          'auction.order_auto_confirmed',
+        );
+        this.sockets.emitToAdmins('shipping_request_created', closeResult.checkout.shipmentRequest);
+        this.sockets.emitToCustomer(winnerCustomerId, 'order_updated', {
+          orderId: closeResult.sale.order.id,
+          auctionId,
+        });
+      }
       await this.notifications.createForCustomer({
         customerId: winnerCustomerId,
         type: NotificationType.AUCTION_WON,
-        title: 'Auction won',
-        body: closeResult.auction.title,
-        data: { auctionId: closeResult.auction.id },
+        title: 'فزت بالمزاد وتم تأكيد طلبك',
+        body: `${closeResult.auction.title} — تقدر تتابع الطلب وتدفع من المحفظة من طلباتي`,
+        data: { auctionId: closeResult.auction.id, orderId: closeResult.sale?.order.id },
       });
       const losingCustomerIds = new Set(
         closeResult.bids
@@ -764,7 +843,14 @@ export class AuctionsService {
     await this.closeQueue.add(
       'close',
       { auctionId },
-      { jobId: `auction-close-${auctionId}`, delay, removeOnComplete: true, removeOnFail: 100 },
+      {
+        jobId: `auction-close-${auctionId}-${endsAt.getTime()}`,
+        delay,
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 1000 },
+        removeOnComplete: true,
+        removeOnFail: 100,
+      },
     );
   }
 

@@ -37,6 +37,7 @@ import { UploadsModule } from 'src/uploads/uploads.module';
 import { VerificationModule } from 'src/verification/verification.module';
 import { WarehouseModule } from 'src/warehouse/warehouse.module';
 import { WalletModule } from 'src/wallet/wallet.module';
+import { AdminConsoleModule } from 'src/admin-console/admin-console.module';
 
 @Module({
   imports: [
@@ -97,6 +98,7 @@ import { WalletModule } from 'src/wallet/wallet.module';
     WalletModule,
     OrdersModule,
     ScreensModule,
+    AdminConsoleModule,
   ],
 })
 export class AppModule implements NestModule {

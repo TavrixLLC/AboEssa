@@ -2,9 +2,9 @@ import { ApiProperty } from '@nestjs/swagger';
 import { IsString, MaxLength, MinLength } from 'class-validator';
 
 export class DeleteCustomerAccountDto {
-  @ApiProperty({ writeOnly: true, minLength: 10, maxLength: 128 })
+  @ApiProperty({ writeOnly: true, minLength: 1, maxLength: 128 })
   @IsString()
-  @MinLength(10)
+  @MinLength(1)
   @MaxLength(128)
   password: string;
 }

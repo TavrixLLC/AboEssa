@@ -4,6 +4,7 @@ import { Server } from 'socket.io';
 export type RealtimeEvent =
   | 'last_sale_updated'
   | 'order_item_sold'
+  | 'order_updated'
   | 'product_sold'
   | 'auction_updated'
   | 'auction_closed'
