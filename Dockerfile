@@ -14,7 +14,6 @@ FROM deps AS builder
 COPY prisma ./prisma
 COPY tsconfig*.json nest-cli.json ./
 COPY src ./src
-COPY tests ./tests
 RUN npm run prisma:generate
 RUN npm run build
 

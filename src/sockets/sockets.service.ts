@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Server } from 'socket.io';
 
 export type RealtimeEvent =
+  | 'catalog_changed'
   | 'last_sale_updated'
   | 'order_item_sold'
   | 'order_updated'
@@ -18,8 +19,7 @@ export type RealtimeEvent =
   | 'staff_status_changed'
   | 'staff_access_changed'
   | 'staff_session_revoked'
-  | 'role_updated'
-  | 'quick_sale_display_updated';
+  | 'role_updated';
 
 @Injectable()
 export class SocketsService {
@@ -31,10 +31,6 @@ export class SocketsService {
 
   emitToAdmins(event: RealtimeEvent, payload: unknown) {
     this.server?.to('admins').emit(event, payload);
-  }
-
-  emitToScreens(event: RealtimeEvent, payload: unknown) {
-    this.server?.to('screens').emit(event, payload);
   }
 
   emitToCustomers(event: RealtimeEvent, payload: unknown) {
@@ -60,25 +56,15 @@ export class SocketsService {
     }
   }
 
-  emitQuickSaleDisplayUpdated(recordId: string) {
-    this.emitToScreens('quick_sale_display_updated', { refresh: true, recordId });
-  }
-
-  disconnectScreen(screenId: string) {
-    this.server?.in(`screen:${screenId}`).disconnectSockets(true);
-  }
-
   emitLabelJobUpdated(payload: unknown) {
     this.emitToAdmins('label_job_updated', payload);
   }
 
   emitSessionUpdated(payload: unknown) {
     this.emitToAdmins('session_updated', payload);
-    this.emitToScreens('session_updated', payload);
   }
 
   emitSessionEnded(payload: unknown) {
     this.emitToAdmins('session_ended', payload);
-    this.emitToScreens('session_ended', payload);
   }
 }

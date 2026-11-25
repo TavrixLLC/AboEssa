@@ -8,6 +8,7 @@ import { getPagination, toPaginatedResult } from 'src/common/pagination/paginati
 import { PasswordService } from 'src/common/security/password.service';
 import { assertPasswordPolicy } from 'src/common/security/password-policy';
 import { toSafeAdminUser } from 'src/common/utils/safe-user.util';
+import { withoutRetiredPermissions } from 'src/permissions/permission-resolution';
 import { AdminUserQueryDto } from 'src/admin-users/dto/admin-user-query.dto';
 import { CreateAdminUserDto } from 'src/admin-users/dto/create-admin-user.dto';
 import { UpdateAdminUserDto } from 'src/admin-users/dto/update-admin-user.dto';
@@ -34,7 +35,7 @@ export class AdminUsersService {
         normalizedEmail,
         passwordHash: await this.passwordService.hash(dto.password),
         role: dto.role,
-        permissions: dto.role === AdminRole.OWNER ? OWNER_PERMISSIONS : dto.permissions ?? [],
+        permissions: dto.role === AdminRole.OWNER ? OWNER_PERMISSIONS : withoutRetiredPermissions(dto.permissions),
         isOwner: dto.role === AdminRole.OWNER,
         isActive: dto.isActive ?? true,
         status: dto.isActive === false ? 'INACTIVE' : 'ACTIVE',
@@ -105,7 +106,12 @@ export class AdminUsersService {
       email: dto.email?.toLowerCase(),
       normalizedEmail: dto.email?.toLowerCase(),
       role: dto.role,
-      permissions: dto.role === AdminRole.OWNER ? OWNER_PERMISSIONS : dto.permissions,
+      permissions:
+        dto.role === AdminRole.OWNER
+          ? OWNER_PERMISSIONS
+          : dto.permissions === undefined
+            ? undefined
+            : withoutRetiredPermissions(dto.permissions),
       isOwner: dto.role === AdminRole.OWNER ? true : undefined,
       isActive: dto.isActive,
       status: dto.isActive === false ? 'INACTIVE' : dto.isActive === true ? 'ACTIVE' : undefined,

@@ -3,6 +3,16 @@ dist
 coverage
 .git
 .env
+.env.*
+backups
+docs/benchmarks
+tools
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.jks
+**/*service-account*.json
 *.log
 uploads
 tmp

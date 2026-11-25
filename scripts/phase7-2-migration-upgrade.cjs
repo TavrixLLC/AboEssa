@@ -1,0 +1,21 @@
+if(process.env.REZONA_PHASE72_QA!=='1')throw Error('Explicit isolated Phase72 only');
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict'),{spawnSync}=require('node:child_process');
+const root=path.resolve(__dirname,'..'),runId=process.argv[2];
+if(!/^20261122-[a-f0-9]{8}$/.test(runId??''))throw Error('Invalid run ID');
+const out=path.join(root,'docs/benchmarks/phase7-2',runId),qa=path.join('D:/rezona-phase7-2-qa',runId),target='rezona_phase72_upgrade';
+if(!fs.existsSync(path.join(out,'run.json')))throw Error('Unknown run');
+const secrets=JSON.parse(fs.readFileSync(path.join(qa,'runtime-secrets.json'),'utf8'));
+const run=(exe,args,input,env={},cwd=root)=>{const r=spawnSync(exe,args,{cwd,env:{...process.env,...env},input,encoding:'utf8',windowsHide:true,maxBuffer:128*1024*1024,timeout:120000});if(r.status!==0)throw Error((r.stderr||r.stdout).slice(-2000));return r.stdout;};
+const sql=(db,q)=>{if(!['postgres',target].includes(db))throw Error('Wrong target');return run('docker',['exec','-i','rezona-phase72-qa-postgres','psql','-U','phase72_qa','-d',db,'-v','ON_ERROR_STOP=1','-Atc',q]).trim();};
+if(sql('postgres',`SELECT 1 FROM pg_database WHERE datname='${target}'`))throw Error('No-overwrite upgrade DB');
+run('docker',['exec','rezona-phase72-qa-postgres','createdb','-U','phase72_qa',target]);
+// Protected Phase71 is only a read-only pg_dump source. Never migrate, seed or reset it.
+const dump=run('docker',['exec','rezona-phase71-qa-postgres','pg_dump','-U','phase71_qa','-d','rezona_phase71_qa','--no-owner','--no-acl']);
+run('docker',['exec','-i','rezona-phase72-qa-postgres','psql','-U','phase72_qa','-d',target,'-v','ON_ERROR_STOP=1'],dump);
+const tables=sql(target,"SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename<>'_prisma_migrations' ORDER BY tablename").split('\n');
+const fingerprints=()=>Object.fromEntries(tables.map(t=>{if(!/^[A-Za-z0-9_]+$/.test(t))throw Error('Unsafe identifier');return[t,sql(target,`SELECT count(*)||':'||COALESCE(md5(string_agg(h,'' ORDER BY h)),'empty') FROM (SELECT md5(row_to_json(x)::text) h FROM "${t}" x) q`)];}));
+const before=fingerprints();assert.equal(sql(target,'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL'),'37');
+const log=run(process.execPath,[path.join(root,'node_modules/prisma/build/index.js'),'migrate','deploy','--schema',path.join(root,'prisma/schema.prisma')],undefined,{DATABASE_URL:'postgresql://phase72_qa:'+encodeURIComponent(secrets.postgresPassword)+'@127.0.0.1:55454/'+target},qa);
+const after=fingerprints();assert.deepEqual(after,before);assert.equal(sql(target,'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL'),'38');
+fs.writeFileSync(path.join(out,'upgrade-37-to-38.json'),JSON.stringify({passed:true,scope:'Read-only Phase71 dump into new disposable Phase72 clone; no source writes; no raw rows in evidence',from:37,to:38,tables:tables.length,before,after,log},null,2),{flag:'wx'});
+console.log(JSON.stringify({passed:true,from:37,to:38,unchangedTables:tables.length}));

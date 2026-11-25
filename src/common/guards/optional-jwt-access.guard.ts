@@ -2,7 +2,7 @@ import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from
 import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
-import { ActorType, AdminRole, CustomerStatus, ScreenStatus } from '@prisma/client';
+import { ActorType, AdminRole, CustomerStatus } from '@prisma/client';
 import { Request } from 'express';
 import { TOKEN_TYPES_KEY } from 'src/common/decorators/token-type.decorator';
 import { TokenType } from 'src/common/enums/token-type.enum';
@@ -73,9 +73,6 @@ export class OptionalJwtAccessGuard implements CanActivate {
     if (type === TokenType.Customer) {
       return this.config.get<string>('jwt.customerAccessSecret');
     }
-    if (type === TokenType.Screen) {
-      return this.config.get<string>('jwt.screenAccessSecret');
-    }
     return undefined;
   }
 
@@ -111,20 +108,6 @@ export class OptionalJwtAccessGuard implements CanActivate {
       return { id: customer.id, type: TokenType.Customer, actorType: ActorType.CUSTOMER };
     }
 
-    const screen = await this.prisma.screenDevice.findUnique({ where: { id: payload.sub } });
-    if (
-      !screen ||
-      !screen.isActive ||
-      screen.status !== ScreenStatus.ACTIVE ||
-      payload.tokenVersion !== screen.tokenVersion
-    ) {
-      throw new UnauthorizedException({ message: 'Screen token has been revoked', code: 'SCREEN_REVOKED' });
-    }
-    return {
-      id: screen.id,
-      type: TokenType.Screen,
-      actorType: ActorType.SCREEN,
-      tokenVersion: screen.tokenVersion,
-    };
+    throw new UnauthorizedException({ message: 'Invalid token type', code: 'INVALID_TOKEN_TYPE' });
   }
 }

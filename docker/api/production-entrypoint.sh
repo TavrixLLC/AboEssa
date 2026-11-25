@@ -9,5 +9,17 @@ export REDIS_URL="$(ABOESSA_SECRET_VALUE="$redis_password" node -e "process.stdo
 
 unset database_password redis_password ABOESSA_SECRET_VALUE
 
-npx prisma migrate deploy
+# Normal restarts may inspect migration state but must not silently change schema.
+# The reviewed one-shot deploy-only command is an explicit final-GO operation.
+case "${ABOESSA_MIGRATION_MODE:-status}" in
+  status) npx --no-install prisma migrate status ;;
+  status-only) npx --no-install prisma migrate status; exit 0 ;;
+  diff-only)
+    npx --no-install prisma migrate diff \
+      --from-schema-datasource prisma/schema.prisma \
+      --to-schema-datamodel prisma/schema.prisma --exit-code
+    exit 0 ;;
+  deploy-only) npx --no-install prisma migrate deploy; exit 0 ;;
+  *) echo 'Unsupported migration mode; refusing startup.' >&2; exit 1 ;;
+esac
 exec node dist/src/main.js

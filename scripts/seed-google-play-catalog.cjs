@@ -2,18 +2,19 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { PrismaClient, ProductListingStatus, AuctionStatus, AuctionTier } = require('@prisma/client');
 const { Queue } = require('bullmq');
-const { Client: MinioClient } = require('minio');
+const { S3Client, PutObjectCommand, HeadBucketCommand, CreateBucketCommand } = require('@aws-sdk/client-s3');
 
 const prisma = new PrismaClient();
 const assetsDir = process.env.DEMO_ASSETS_DIR || '/tmp/aboessa-google-play-catalog';
 const bucket = process.env.MINIO_BUCKET || 'aboessa-media';
 
-const minio = new MinioClient({
-  endPoint: process.env.MINIO_ENDPOINT || 'minio',
-  port: Number(process.env.MINIO_PORT || 9000),
-  useSSL: process.env.MINIO_USE_SSL === 'true',
-  accessKey: process.env.MINIO_ACCESS_KEY || process.env.MINIO_ROOT_USER || 'minioadmin',
-  secretKey: process.env.MINIO_SECRET_KEY || process.env.MINIO_ROOT_PASSWORD || 'minioadmin',
+const minio = new S3Client({
+  endpoint: `${process.env.MINIO_USE_SSL === 'true' ? 'https' : 'http'}://${process.env.MINIO_ENDPOINT || 'minio'}:${Number(process.env.MINIO_PORT || 9000)}`,
+  region: 'us-east-1', forcePathStyle: true, maxAttempts: 1,
+  credentials: {
+    accessKeyId: process.env.MINIO_ACCESS_KEY || process.env.MINIO_ROOT_USER || 'minioadmin',
+    secretAccessKey: process.env.MINIO_SECRET_KEY || process.env.MINIO_ROOT_PASSWORD || 'minioadmin',
+  },
 });
 
 const categories = [
@@ -141,7 +142,7 @@ async function uploadAsset(filename, folder, adminId) {
   const key = `${folder}/google-play-${filename}`;
   const url = `/api/media/${key}`;
 
-  await minio.fPutObject(bucket, key, source, { 'Content-Type': 'image/png' });
+  await minio.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: fs.readFileSync(source), ContentLength: stat.size, ContentType: 'image/png' }));
   await prisma.fileAsset.upsert({
     where: { key },
     create: {
@@ -169,7 +170,11 @@ async function main() {
   });
   if (!admin) throw new Error('No active AboEssa admin account is available for demo catalog ownership.');
 
-  if (!(await minio.bucketExists(bucket))) await minio.makeBucket(bucket);
+  try { await minio.send(new HeadBucketCommand({ Bucket: bucket })); }
+  catch (error) {
+    if (error.$metadata?.httpStatusCode !== 404 && error.name !== 'NoSuchBucket') throw error;
+    await minio.send(new CreateBucketCommand({ Bucket: bucket }));
+  }
 
   const categoryBySlug = new Map();
   for (const category of categories) {

@@ -37,7 +37,7 @@ body {
   font-weight: 800;
 }
 .brand::before {
-  content: "ش";
+  content: "R";
   display: grid;
   width: 42px;
   height: 42px;

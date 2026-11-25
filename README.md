@@ -1,5 +1,9 @@
 # Single Store Commerce API
 
+## Current developer handoff — Phase 9
+
+Start with [REZONA Phase 9 developer handoff](docs/REZONA_PHASE_9_DEVELOPER_HANDOFF.md) for the current architecture, completed work, release artifacts, unresolved gates, safe checks and next steps. **Dedicated staging is not provisioned; production remains NO-GO.** The older phase/setup sections below are not deployment authorization. Raw private QA evidence is intentionally excluded; see [evidence availability](docs/benchmarks/README.md).
+
 NestJS backend for one store only. There is no tenant switching or store selection. Store-level operational configuration lives in the singleton `AppSettings` row. Live streaming is intentionally decommissioned from the current product; its legacy persistence remains dormant for compatibility.
 
 ## Phase A Contents
@@ -20,7 +24,6 @@ NestJS backend for one store only. There is no tenant switching or store selecti
 - Label payloads, print jobs, mark printed, mark failed, and confirm attached.
 - Warehouse label-pending, print-label, confirm-attached, customer boxes, and barcode search.
 - Customer `/customer/box`, `/customer/order-items`, and `/customer/orders` endpoints.
-- Screen devices with separate screen JWTs and realtime events for latest sale/session/label updates.
 
 ## Phase C Contents
 
@@ -105,7 +108,6 @@ Important variables:
 - `REDIS_URL`
 - `JWT_ADMIN_ACCESS_SECRET`
 - `JWT_CUSTOMER_ACCESS_SECRET`
-- `JWT_SCREEN_ACCESS_SECRET`
 - `SEED_ADMIN_EMAIL`
 - `SEED_ADMIN_PASSWORD`
 - `CORS_ORIGINS`
@@ -230,7 +232,7 @@ npm run test:e2e
 - Use `docker-compose.prod.yml` as a baseline and put Postgres/Redis on private networks only.
 - Run `npm run prisma:deploy` during release, not `prisma migrate dev`.
 - Keep JWT secrets and `SEED_ADMIN_PASSWORD` in a secrets manager.
-- Lock down `CORS_ORIGINS` to the real admin/customer/screen origins.
+- Lock down `CORS_ORIGINS` to the real admin/customer origins.
 - Configure object storage, push, and printer providers by replacing the Phase A interfaces with real implementations.
 - Serve only over HTTPS behind a reverse proxy.
 - Configure database backups and restore drills.

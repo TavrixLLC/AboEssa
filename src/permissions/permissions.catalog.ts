@@ -267,6 +267,13 @@ export const PERMISSIONS_CATALOG: PermissionCatalogGroupDto[] = [
     labelAr: 'المخزن',
     labelEn: 'Warehouse',
     permissions: [
+      permission(PERMISSIONS.WAREHOUSE_MANAGE,'إدارة المخازن والمواقع','Manage warehouses and locations','إدارة المواقع دون حذف سجل الحركات','Manage locations without deleting history'),
+      permission(PERMISSIONS.INVENTORY_READ,'مشاهدة الأرصدة والحركات','Read inventory','مشاهدة مخزون المواقع','Read location stock'),
+      permission(PERMISSIONS.INVENTORY_RECEIVE,'إضافة مخزون','Receive stock','إضافة كميات بوصل مخزون','Record stock receipts'),
+      permission(PERMISSIONS.INVENTORY_TRANSFER,'نقل مخزون','Transfer stock','نقل كميات بين المواقع','Transfer between locations'),
+      permission(PERMISSIONS.INVENTORY_ADJUST,'تسوية المخزون','Adjust stock','تسويات عدّ موثقة','Audited count adjustments',true),
+      permission(PERMISSIONS.INVENTORY_RECONCILE,'مطابقة المخزون','Reconcile stock','قراءة فروقات المخزون','Read discrepancies'),
+      permission(PERMISSIONS.INVENTORY_MIGRATE,'ترحيل الأرصدة الافتتاحية','Backfill opening balances','ترحيل تاريخي مراقب','Controlled historical mapping',true),
       permission(PERMISSIONS.WAREHOUSE_READ, 'مشاهدة المخزن', 'View warehouse', 'يسمح بمشاهدة المخزن', 'Allows viewing warehouse'),
       permission(PERMISSIONS.WAREHOUSE_SEARCH, 'بحث المخزن', 'Search warehouse', 'يسمح بالبحث في المخزن', 'Allows searching warehouse'),
       permission(PERMISSIONS.WAREHOUSE_PRINT_LABEL, 'طباعة من المخزن', 'Print from warehouse', 'يسمح بطباعة ملصقات المخزن', 'Allows warehouse label printing'),
@@ -279,14 +286,6 @@ export const PERMISSIONS_CATALOG: PermissionCatalogGroupDto[] = [
     labelEn: 'Shipping',
     permissions: [
       permission(PERMISSIONS.SHIPPING_MANAGE, 'إدارة الشحن', 'Manage shipping', 'يسمح بإدارة طلبات الشحن', 'Allows managing shipping'),
-    ],
-  },
-  {
-    group: 'screens',
-    labelAr: 'الشاشات',
-    labelEn: 'Screens',
-    permissions: [
-      permission(PERMISSIONS.SCREENS_MANAGE, 'إدارة الشاشات', 'Manage screens', 'يسمح بإدارة شاشات العرض', 'Allows managing screen devices'),
     ],
   },
   {
@@ -385,6 +384,14 @@ addCatalogPermissions('reports', [
   permission(PERMISSIONS.REPORTS_INFLUENCERS, 'تقرير المؤثرين', 'Influencers report', 'يسمح بعرض تقارير المؤثرين', 'Allows viewing influencer reports'),
   permission(PERMISSIONS.REPORTS_AUCTIONS, 'تقرير المزادات', 'Auctions report', 'يسمح بعرض تقارير المزادات', 'Allows viewing auction reports'),
 ]);
+PERMISSIONS_CATALOG.push({
+  group:'product_intake',labelAr:'إضافة منتجات سريعة',labelEn:'Rapid product intake',permissions:[
+    permission(PERMISSIONS.INTAKE_USE,'إضافة منتجات سريعة','Rapid intake','إنشاء واستكمال مسوداتي الخاصة','Manage own private intake drafts'),
+    permission(PERMISSIONS.INTAKE_ENHANCE_PAID,'تحسين الصور المدفوع','Paid image editing','طلب تعديل خارجي ضمن الميزانية المعتمدة','Explicit external editing within approved budget',true),
+    permission(PERMISSIONS.INTAKE_GEMINI_STUDIO,'تنسيق ريزونا عبر Gemini','Gemini brand studio','تنسيق صورة معزولة ومعتمدة ضمن موافقة النقل والميزانية','Explicit approved-mask styling within transfer consent and budget',true),
+    permission(PERMISSIONS.INTAKE_MANAGE_ALL,'إدارة مسودات جميع الموظفين','Manage all intake drafts','صلاحية حساسة لمراجعة مسودات الموظفين','Sensitive cross-employee draft access',true),
+  ],
+});
 PERMISSIONS_CATALOG.push({
   group: 'roles',
   labelAr: 'Roles',

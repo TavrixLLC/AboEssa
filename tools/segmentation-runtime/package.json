@@ -1,0 +1,7 @@
+{
+  "name": "rezona-local-segmentation-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Optional isolated CPU runtime; never part of Flutter or automatically downloaded by requests",
+  "dependencies": { "onnxruntime-node": "1.31.1" }
+}

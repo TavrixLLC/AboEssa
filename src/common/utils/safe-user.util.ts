@@ -1,4 +1,5 @@
 import { AdminUser, Customer } from '@prisma/client';
+import { withoutRetiredPermissions } from 'src/permissions/permission-resolution';
 
 export const toSafeAdminUser = (admin: AdminUser) => ({
   id: admin.id,
@@ -10,8 +11,8 @@ export const toSafeAdminUser = (admin: AdminUser) => ({
   jobTitle: admin.jobTitle,
   notes: admin.notes,
   role: admin.role,
-  permissions: admin.permissions,
-  deniedPermissions: admin.deniedPermissions,
+  permissions: withoutRetiredPermissions(admin.permissions),
+  deniedPermissions: withoutRetiredPermissions(admin.deniedPermissions),
   isActive: admin.isActive,
   status: admin.status,
   isOwner: admin.isOwner || admin.role === 'OWNER',

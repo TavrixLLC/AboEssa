@@ -11,6 +11,7 @@ import { PERMISSIONS } from 'src/common/constants/permissions.constants';
 import { AuthenticatedUser } from 'src/common/types/authenticated-user.interface';
 import { toSafeAdminUser } from 'src/common/utils/safe-user.util';
 import { PermissionResolverService } from 'src/permissions/permission-resolver.service';
+import { withoutRetiredPermissions } from 'src/permissions/permission-resolution';
 import { PERMISSIONS_CATALOG } from 'src/permissions/permissions.catalog';
 import { SocketsService } from 'src/sockets/sockets.service';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -68,9 +69,10 @@ export class StaffService {
   }
 
   private validateKeys(keys: string[] = []) {
-    const invalid = [...new Set(keys)].filter((key) => !catalogKeys.has(key));
+    const activeKeys = [...new Set(withoutRetiredPermissions(keys))];
+    const invalid = activeKeys.filter((key) => !catalogKeys.has(key));
     if (invalid.length) throw new AppException('One or more permission keys are invalid', 'INVALID_PERMISSION_KEY', HttpStatus.BAD_REQUEST, { invalid });
-    return [...new Set(keys)].sort();
+    return activeKeys.sort();
   }
 
   private async validateAssignable(keys: string[], actorId: string, actorIsOwner: boolean) {
@@ -107,8 +109,8 @@ export class StaffService {
         isSystem: assignment.role.isSystem,
         isActive: assignment.role.isActive,
       })),
-      directGrants: [...(admin.permissions ?? [])].sort(),
-      directDenies: [...(admin.deniedPermissions ?? [])].sort(),
+      directGrants: withoutRetiredPermissions(admin.permissions).sort(),
+      directDenies: withoutRetiredPermissions(admin.deniedPermissions).sort(),
       effectivePermissions: effectivePermissions ?? [],
     };
   }
@@ -161,7 +163,7 @@ export class StaffService {
     const roleIds = [...new Set(dto.roleIds ?? [])];
     const roles = roleIds.length ? await this.prisma.role.findMany({ where: { id: { in: roleIds }, isActive: true } }) : [];
     if (roles.length !== roleIds.length) throw new AppException('One or more roles were not found or are inactive', 'INVALID_ROLE', HttpStatus.BAD_REQUEST);
-    const rolePermissions = roles.flatMap((role) => role.permissionKeys);
+    const rolePermissions = roles.flatMap((role) => withoutRetiredPermissions(role.permissionKeys));
     await this.validateAssignable([...rolePermissions, ...(dto.directGrantKeys ?? [])], actorId, actorOwner);
     const grants = this.validateKeys(dto.directGrantKeys);
     const denies = this.validateKeys(dto.directDenyKeys);
@@ -259,7 +261,7 @@ export class StaffService {
     const roleIds = [...new Set(dto.roleIds ?? [])];
     const roles = roleIds.length ? await this.prisma.role.findMany({ where: { id: { in: roleIds }, isActive: true } }) : [];
     if (roles.length !== roleIds.length) throw new AppException('One or more roles were not found or are inactive', 'INVALID_ROLE');
-    const rolePermissions = roles.flatMap((role) => role.permissionKeys);
+    const rolePermissions = roles.flatMap((role) => withoutRetiredPermissions(role.permissionKeys));
     await this.validateAssignable([...rolePermissions, ...(dto.directGrantKeys ?? [])], actorId, actorOwner);
     const grants = this.validateKeys(dto.directGrantKeys);
     const denies = this.validateKeys(dto.directDenyKeys);
@@ -281,7 +283,7 @@ export class StaffService {
     const roleIds = [...new Set(dto.roleIds ?? [])];
     const roles = roleIds.length ? await this.prisma.role.findMany({ where: { id: { in: roleIds }, isActive: true } }) : [];
     if (roles.length !== roleIds.length) throw new AppException('One or more roles were not found or are inactive', 'INVALID_ROLE');
-    const rolePermissions = roles.flatMap((role) => role.permissionKeys);
+    const rolePermissions = roles.flatMap((role) => withoutRetiredPermissions(role.permissionKeys));
     await this.validateAssignable([...rolePermissions, ...(dto.directGrantKeys ?? [])], actorId, actorOwner);
     const grants = this.validateKeys(dto.directGrantKeys);
     const denies = this.validateKeys(dto.directDenyKeys);

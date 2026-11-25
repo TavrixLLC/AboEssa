@@ -22,6 +22,7 @@ import { SocketsService } from 'src/sockets/sockets.service';
 import { WalletService } from 'src/wallet/wallet.service';
 import { hashRequestMetadata } from 'src/common/security/hash.util';
 import { ConsoleOrderActionDto, ConsoleOrdersQueryDto } from './console.dto';
+import { InventoryLedger, inventoryRetryable } from 'src/inventory/inventory-ledger';
 
 const customerSelect = {
   id: true,
@@ -185,224 +186,247 @@ export class AdminConsoleService {
   }
 
   async changeOrder(id: string, dto: ConsoleOrderActionDto, adminId: string, request: Request) {
-    const result = await this.prisma.$transaction(
-      async (tx) => {
-        await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${id} FOR UPDATE`;
-        const order = await tx.order.findFirst({
-          where: { id, ...confirmedWhere },
-          include: { items: true },
-        });
-        if (!order)
-          throw new AppException('Order was not found', 'ORDER_NOT_FOUND', HttpStatus.NOT_FOUND);
-        const ids = order.items.map((item) => item.id);
-        const shipments = await tx.shipmentRequest.findMany({
-          where: {
-            customerId: order.customerId,
-            requestedItemIds: { hasSome: ids },
-            status: { not: ShippingRequestStatus.CANCELLED },
-          },
-        });
-        if (
-          shipments.some((shipment) =>
-            shipment.requestedItemIds.some((itemId) => !ids.includes(itemId)),
+    const result = await this.prisma
+      .$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${id} FOR UPDATE`;
+          const order = await tx.order.findFirst({
+            where: { id, ...confirmedWhere },
+            include: { items: true },
+          });
+          if (!order)
+            throw new AppException('Order was not found', 'ORDER_NOT_FOUND', HttpStatus.NOT_FOUND);
+          const ids = order.items.map((item) => item.id);
+          const shipments = await tx.shipmentRequest.findMany({
+            where: {
+              customerId: order.customerId,
+              requestedItemIds: { hasSome: ids },
+              status: { not: ShippingRequestStatus.CANCELLED },
+            },
+          });
+          if (
+            shipments.some((shipment) =>
+              shipment.requestedItemIds.some((itemId) => !ids.includes(itemId)),
+            )
           )
-        )
-          throw new AppException(
-            'Combined shipment must be managed together',
-            'ORDER_SHIPMENT_CONFLICT',
-            HttpStatus.CONFLICT,
-          );
-        const state = this.orderState(order);
-        const target = {
-          PREPARE: 'PREPARING',
-          READY: 'READY',
-          SHIP: 'SHIPPED',
-          DELIVER: 'DELIVERED',
-          CANCEL: 'CANCELLED',
-        }[dto.action];
-        if (state === target) return { customerId: order.customerId, changed: false };
-        const allowed: Record<string, string[]> = {
-          NEW: ['PREPARE', 'CANCEL'],
-          PREPARING: ['READY', 'CANCEL'],
-          READY: ['SHIP', 'CANCEL'],
-          SHIPPED: ['DELIVER'],
-          DELIVERED: [],
-          CANCELLED: [],
-        };
-        if (!allowed[state]?.includes(dto.action))
-          throw new AppException(
-            'Invalid order status transition',
-            'INVALID_ORDER_TRANSITION',
-            HttpStatus.CONFLICT,
-          );
-        if (
-          dto.action !== 'CANCEL' &&
-          dto.action !== 'DELIVER' &&
-          (!shipments.length ||
-            shipments.some((shipment) => !hasDeliveryAddress(shipment.addressSnapshot)))
-        ) {
-          throw new AppException(
-            'A delivery address is required before preparation or shipping',
-            'DELIVERY_ADDRESS_REQUIRED',
-            HttpStatus.CONFLICT,
-          );
-        }
-        const now = new Date();
-        if (dto.action === 'PREPARE') {
-          await tx.order.update({ where: { id }, data: { status: OrderStatus.PACKING } });
-          await tx.shipmentRequest.updateMany({
-            where: { id: { in: shipments.map((item) => item.id) } },
-            data: { status: ShippingRequestStatus.APPROVED, approvedAt: now },
-          });
-        } else if (dto.action === 'READY') {
-          await tx.orderItem.updateMany({
-            where: { id: { in: ids } },
-            data: { status: OrderItemStatus.PACKED },
-          });
-          await tx.shipmentRequest.updateMany({
-            where: { id: { in: shipments.map((item) => item.id) } },
-            data: { status: ShippingRequestStatus.PACKING, packedAt: now },
-          });
-        } else if (dto.action === 'SHIP') {
-          if (!dto.shippingCompany?.trim())
             throw new AppException(
-              'Shipping company is required',
-              'SHIPPING_COMPANY_REQUIRED',
-              HttpStatus.BAD_REQUEST,
+              'Combined shipment must be managed together',
+              'ORDER_SHIPMENT_CONFLICT',
+              HttpStatus.CONFLICT,
             );
-          await tx.order.update({
-            where: { id },
-            data: { status: OrderStatus.SHIPPED, shippedAt: now },
-          });
-          await tx.orderItem.updateMany({
-            where: { id: { in: ids } },
-            data: { status: OrderItemStatus.SHIPPED },
-          });
-          await tx.shipmentRequest.updateMany({
-            where: { id: { in: shipments.map((item) => item.id) } },
-            data: {
-              status: ShippingRequestStatus.SHIPPED,
-              shippedAt: now,
-              shippingCompany: dto.shippingCompany.trim(),
-              trackingNumber: dto.trackingNumber?.trim() || null,
-              shippingPrice: dto.shippingPrice,
-            },
-          });
-          await tx.shipment.create({
-            data: {
-              customerId: order.customerId,
-              orderId: id,
-              itemIds: ids,
-              status: ShipmentStatus.SHIPPED,
-              shippedAt: now,
-              shippingCompany: dto.shippingCompany.trim(),
-              trackingNumber: dto.trackingNumber?.trim() || null,
-              shippingPrice: dto.shippingPrice,
-            },
-          });
-        } else if (dto.action === 'DELIVER') {
-          await tx.order.update({
-            where: { id },
-            data: { status: OrderStatus.DELIVERED, deliveredAt: now },
-          });
-          await tx.orderItem.updateMany({
-            where: { id: { in: ids } },
-            data: { status: OrderItemStatus.DELIVERED },
-          });
-          await tx.shipment.updateMany({
-            where: { orderId: id },
-            data: { status: ShipmentStatus.DELIVERED, deliveredAt: now },
-          });
-        } else {
-          if (!dto.reason?.trim())
+          const state = this.orderState(order);
+          const target = {
+            PREPARE: 'PREPARING',
+            READY: 'READY',
+            SHIP: 'SHIPPED',
+            DELIVER: 'DELIVERED',
+            CANCEL: 'CANCELLED',
+          }[dto.action];
+          if (state === target) return { customerId: order.customerId, changed: false };
+          const allowed: Record<string, string[]> = {
+            NEW: ['PREPARE', 'CANCEL'],
+            PREPARING: ['READY', 'CANCEL'],
+            READY: ['SHIP', 'CANCEL'],
+            SHIPPED: ['DELIVER'],
+            DELIVERED: [],
+            CANCELLED: [],
+          };
+          if (!allowed[state]?.includes(dto.action))
             throw new AppException(
-              'Cancellation reason is required',
-              'CANCELLATION_REASON_REQUIRED',
-              HttpStatus.BAD_REQUEST,
+              'Invalid order status transition',
+              'INVALID_ORDER_TRANSITION',
+              HttpStatus.CONFLICT,
             );
-          const paid = order.items.reduce(
-            (sum, item) => sum.plus(item.walletPaidAmount),
-            new Prisma.Decimal(0),
-          );
-          if (paid.greaterThan(0)) await this.wallet.refundPurchase(tx, order.customerId, paid, id);
-          await tx.order.update({
-            where: { id },
-            data: { status: OrderStatus.CANCELLED, cancelledAt: now, notes: dto.reason.trim() },
-          });
-          await tx.orderItem.updateMany({
-            where: { id: { in: ids } },
-            data: { status: OrderItemStatus.CANCELLED, cancelledAt: now },
-          });
-          await tx.shipmentRequest.updateMany({
-            where: { id: { in: shipments.map((item) => item.id) } },
-            data: {
-              status: ShippingRequestStatus.CANCELLED,
-              cancelledAt: now,
-              adminNote: dto.reason.trim(),
-            },
-          });
-          await tx.customer.update({
-            where: { id: order.customerId },
-            data: { totalCancelledAmount: { increment: order.totalAmount } },
-          });
-          await tx.customerBox.updateMany({
-            where: {
-              customerId: order.customerId,
-              totalItems: { gte: order.items.length },
-              totalAmount: { gte: order.totalAmount },
-            },
-            data: {
-              totalItems: { decrement: order.items.length },
-              totalAmount: { decrement: order.totalAmount },
-            },
-          });
-          const productIds = new Set(
-            order.items.flatMap((item) => (item.productListingId ? [item.productListingId] : [])),
-          );
-          for (const productId of productIds) {
-            const count = order.items.filter((item) => item.productListingId === productId).length;
-            const product = await tx.productListing.findUnique({ where: { id: productId } });
-            if (product)
-              await tx.productListing.update({
-                where: { id: productId },
-                data: {
-                  availableQuantity: { increment: count },
-                  soldQuantity: { decrement: count },
-                  status:
-                    product.status === ProductListingStatus.SOLD
-                      ? ProductListingStatus.ACTIVE
-                      : product.status,
-                },
-              });
+          // Stable product lock order before wallet/customer locks. The hook
+          // remains enforced for mapped products even if management is disabled.
+          for (const productId of [
+            ...new Set(
+              order.items.flatMap((i) => (i.productListingId ? [i.productListingId] : [])),
+            ),
+          ].sort())
+            await InventoryLedger.lockProduct(tx, productId);
+          if (
+            dto.action !== 'CANCEL' &&
+            dto.action !== 'DELIVER' &&
+            (!shipments.length ||
+              shipments.some((shipment) => !hasDeliveryAddress(shipment.addressSnapshot)))
+          ) {
+            throw new AppException(
+              'A delivery address is required before preparation or shipping',
+              'DELIVERY_ADDRESS_REQUIRED',
+              HttpStatus.CONFLICT,
+            );
           }
-          await tx.commissionLedger.updateMany({
-            where: {
-              orderItemId: { in: ids },
-              status: { in: [CommissionStatus.PENDING, CommissionStatus.APPROVED] },
-            },
+          const now = new Date();
+          if (dto.action === 'PREPARE') {
+            await tx.order.update({ where: { id }, data: { status: OrderStatus.PACKING } });
+            await tx.shipmentRequest.updateMany({
+              where: { id: { in: shipments.map((item) => item.id) } },
+              data: { status: ShippingRequestStatus.APPROVED, approvedAt: now },
+            });
+          } else if (dto.action === 'READY') {
+            await tx.orderItem.updateMany({
+              where: { id: { in: ids } },
+              data: { status: OrderItemStatus.PACKED },
+            });
+            await tx.shipmentRequest.updateMany({
+              where: { id: { in: shipments.map((item) => item.id) } },
+              data: { status: ShippingRequestStatus.PACKING, packedAt: now },
+            });
+          } else if (dto.action === 'SHIP') {
+            if (!dto.shippingCompany?.trim())
+              throw new AppException(
+                'Shipping company is required',
+                'SHIPPING_COMPANY_REQUIRED',
+                HttpStatus.BAD_REQUEST,
+              );
+            await InventoryLedger.settleItems(tx, order.items, id, 'SHIP', adminId);
+            await tx.order.update({
+              where: { id },
+              data: { status: OrderStatus.SHIPPED, shippedAt: now },
+            });
+            await tx.orderItem.updateMany({
+              where: { id: { in: ids } },
+              data: { status: OrderItemStatus.SHIPPED },
+            });
+            await tx.shipmentRequest.updateMany({
+              where: { id: { in: shipments.map((item) => item.id) } },
+              data: {
+                status: ShippingRequestStatus.SHIPPED,
+                shippedAt: now,
+                shippingCompany: dto.shippingCompany.trim(),
+                trackingNumber: dto.trackingNumber?.trim() || null,
+                shippingPrice: dto.shippingPrice,
+              },
+            });
+            await tx.shipment.create({
+              data: {
+                customerId: order.customerId,
+                orderId: id,
+                itemIds: ids,
+                status: ShipmentStatus.SHIPPED,
+                shippedAt: now,
+                shippingCompany: dto.shippingCompany.trim(),
+                trackingNumber: dto.trackingNumber?.trim() || null,
+                shippingPrice: dto.shippingPrice,
+              },
+            });
+          } else if (dto.action === 'DELIVER') {
+            await tx.order.update({
+              where: { id },
+              data: { status: OrderStatus.DELIVERED, deliveredAt: now },
+            });
+            await tx.orderItem.updateMany({
+              where: { id: { in: ids } },
+              data: { status: OrderItemStatus.DELIVERED },
+            });
+            await tx.shipment.updateMany({
+              where: { orderId: id },
+              data: { status: ShipmentStatus.DELIVERED, deliveredAt: now },
+            });
+          } else {
+            if (!dto.reason?.trim())
+              throw new AppException(
+                'Cancellation reason is required',
+                'CANCELLATION_REASON_REQUIRED',
+                HttpStatus.BAD_REQUEST,
+              );
+            const paid = order.items.reduce(
+              (sum, item) => sum.plus(item.walletPaidAmount),
+              new Prisma.Decimal(0),
+            );
+            await InventoryLedger.settleItems(tx, order.items, id, 'REVERSE', adminId);
+            if (paid.greaterThan(0))
+              await this.wallet.refundPurchase(tx, order.customerId, paid, id);
+            await tx.order.update({
+              where: { id },
+              data: { status: OrderStatus.CANCELLED, cancelledAt: now, notes: dto.reason.trim() },
+            });
+            await tx.orderItem.updateMany({
+              where: { id: { in: ids } },
+              data: { status: OrderItemStatus.CANCELLED, cancelledAt: now },
+            });
+            await tx.shipmentRequest.updateMany({
+              where: { id: { in: shipments.map((item) => item.id) } },
+              data: {
+                status: ShippingRequestStatus.CANCELLED,
+                cancelledAt: now,
+                adminNote: dto.reason.trim(),
+              },
+            });
+            await tx.customer.update({
+              where: { id: order.customerId },
+              data: { totalCancelledAmount: { increment: order.totalAmount } },
+            });
+            await tx.customerBox.updateMany({
+              where: {
+                customerId: order.customerId,
+                totalItems: { gte: order.items.length },
+                totalAmount: { gte: order.totalAmount },
+              },
+              data: {
+                totalItems: { decrement: order.items.length },
+                totalAmount: { decrement: order.totalAmount },
+              },
+            });
+            const productIds = new Set(
+              order.items.flatMap((item) => (item.productListingId ? [item.productListingId] : [])),
+            );
+            for (const productId of productIds) {
+              const count = order.items.filter(
+                (item) => item.productListingId === productId,
+              ).length;
+              const product = await tx.productListing.findUnique({ where: { id: productId } });
+              if (product)
+                await tx.productListing.update({
+                  where: { id: productId },
+                  data: {
+                    availableQuantity: { increment: count },
+                    soldQuantity: { decrement: count },
+                    status:
+                      product.status === ProductListingStatus.SOLD
+                        ? ProductListingStatus.ACTIVE
+                        : product.status,
+                  },
+                });
+            }
+            await tx.commissionLedger.updateMany({
+              where: {
+                orderItemId: { in: ids },
+                status: { in: [CommissionStatus.PENDING, CommissionStatus.APPROVED] },
+              },
+              data: {
+                status: CommissionStatus.CANCELLED,
+                cancelledAt: now,
+                reason: dto.reason.trim(),
+              },
+            });
+          }
+          await tx.auditLog.create({
             data: {
-              status: CommissionStatus.CANCELLED,
-              cancelledAt: now,
-              reason: dto.reason.trim(),
+              actorType: ActorType.ADMIN,
+              actorId: adminId,
+              action: `order.${dto.action.toLowerCase()}`,
+              entityType: 'Order',
+              entityId: id,
+              metadata: { reason: dto.reason ?? null },
+              ipHash: hashRequestMetadata(request.ip),
+              userAgentHash: hashRequestMetadata(request.headers['user-agent']),
             },
           });
-        }
-        await tx.auditLog.create({
-          data: {
-            actorType: ActorType.ADMIN,
-            actorId: adminId,
-            action: `order.${dto.action.toLowerCase()}`,
-            entityType: 'Order',
-            entityId: id,
-            metadata: { reason: dto.reason ?? null },
-            ipHash: hashRequestMetadata(request.ip),
-            userAgentHash: hashRequestMetadata(request.headers['user-agent']),
-          },
-        });
-        return { customerId: order.customerId, changed: true };
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
+          return { customerId: order.customerId, changed: true };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      )
+      .catch((error: unknown) => {
+        if (inventoryRetryable(error))
+          throw new AppException(
+            'Order changed concurrently; retry the same action',
+            'ORDER_CONFLICT_RETRY',
+            HttpStatus.CONFLICT,
+          );
+        throw error;
+      });
     if (result.changed) {
       this.sockets.emitToAdmins('order_updated', { orderId: id });
       this.sockets.emitToCustomer(result.customerId, 'order_updated', { orderId: id });

@@ -25,32 +25,33 @@
     "test:e2e": "jest --config ./tests/jest-e2e.json --passWithNoTests"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "3.1176.0",
     "@nestjs/bullmq": "^11.0.2",
-    "@nestjs/common": "^11.1.6",
+    "@nestjs/common": "^11.2.10",
     "@nestjs/config": "^4.0.2",
-    "@nestjs/core": "^11.1.6",
+    "@nestjs/core": "^11.2.10",
     "@nestjs/jwt": "^11.0.0",
     "@nestjs/mapped-types": "^2.1.0",
-    "@nestjs/platform-express": "^11.1.6",
-    "@nestjs/platform-socket.io": "^11.1.6",
-    "@nestjs/swagger": "^11.2.0",
+    "@nestjs/platform-express": "^11.2.10",
+    "@nestjs/platform-socket.io": "^11.2.10",
+    "@nestjs/swagger": "^11.4.8",
     "@nestjs/throttler": "^6.4.0",
-    "@nestjs/websockets": "^11.1.6",
+    "@nestjs/websockets": "^11.2.10",
     "@prisma/client": "^6.12.0",
     "argon2": "^0.43.1",
     "bullmq": "^5.56.5",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.2",
-    "compression": "^1.8.1",
+    "compression": "^1.8.2",
     "dotenv": "^17.2.0",
     "firebase-admin": "^13.5.0",
     "helmet": "^8.1.0",
     "ioredis": "^5.6.1",
-    "joi": "^17.13.3",
-    "minio": "^8.0.7",
+    "joi": "^17.13.9",
     "prisma": "^6.12.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
+    "sharp": "0.35.5",
     "socket.io": "^4.8.1"
   },
   "devDependencies": {
@@ -58,7 +59,7 @@
     "@eslint/js": "^9.31.0",
     "@nestjs/cli": "^11.0.10",
     "@nestjs/schematics": "^11.0.7",
-    "@nestjs/testing": "^11.1.6",
+    "@nestjs/testing": "^11.2.10",
     "@types/compression": "^1.8.1",
     "@types/express": "^5.0.3",
     "@types/jest": "^30.0.0",
@@ -77,6 +78,21 @@
     "tsx": "^4.20.3",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.37.0"
+  },
+  "overrides": {
+    "proxy-addr": "2.0.8",
+    "body-parser": "2.4.0",
+    "engine.io": "6.6.10",
+    "@fastify/busboy": "3.2.2",
+    "@grpc/grpc-js": "1.14.5",
+    "@prisma/config": {
+      "deepmerge-ts": "8.0.0",
+      "effect": "3.22.1"
+    },
+    "firebase-admin": {
+      "uuid": "11.1.1"
+    },
+    "qs": "6.16.1"
   },
   "jest": {
     "moduleFileExtensions": [

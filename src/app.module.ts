@@ -17,6 +17,10 @@ import { CustomerAddressesModule } from 'src/customer-addresses/customer-address
 import { CustomersModule } from 'src/customers/customers.module';
 import { HealthModule } from 'src/health/health.module';
 import { InfluencersModule } from 'src/influencers/influencers.module';
+import { ImageOptimizationModule } from 'src/image-optimization/image-optimization.module';
+import { CatalogModule } from 'src/catalog/catalog.module';
+import { InventoryModule } from 'src/inventory/inventory.module';
+import {ProductIntakeModule} from 'src/product-intake/product-intake.module';
 import { StorageModule } from 'src/files/storage.module';
 import { LabelsModule } from 'src/labels/labels.module';
 import { MarketplaceModule } from 'src/marketplace/marketplace.module';
@@ -28,7 +32,6 @@ import { ProductsModule } from 'src/products/products.module';
 import { ReportsModule } from 'src/reports/reports.module';
 import { SalesModule } from 'src/sales/sales.module';
 import { SalesSessionsModule } from 'src/sales-sessions/sales-sessions.module';
-import { ScreensModule } from 'src/screens/screens.module';
 import { SettingsModule } from 'src/settings/settings.module';
 import { ShippingModule } from 'src/shipping/shipping.module';
 import { SocketsModule } from 'src/sockets/sockets.module';
@@ -89,6 +92,10 @@ import { AdminConsoleModule } from 'src/admin-console/admin-console.module';
     AuctionsModule,
     MarketplaceModule,
     UploadsModule,
+    ImageOptimizationModule,
+    CatalogModule,
+    InventoryModule,
+    ProductIntakeModule,
     InfluencersModule,
     StorageModule,
     AdsModule,
@@ -97,7 +104,6 @@ import { AdminConsoleModule } from 'src/admin-console/admin-console.module';
     WarehouseModule,
     WalletModule,
     OrdersModule,
-    ScreensModule,
     AdminConsoleModule,
   ],
 })

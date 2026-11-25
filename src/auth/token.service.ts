@@ -5,6 +5,7 @@ import { AdminUser, Customer } from '@prisma/client';
 import { randomBytes } from 'node:crypto';
 import { TokenType } from 'src/common/enums/token-type.enum';
 import { PasswordService } from 'src/common/security/password.service';
+import { withoutRetiredPermissions } from 'src/permissions/permission-resolution';
 
 @Injectable()
 export class TokenService {
@@ -20,7 +21,7 @@ export class TokenService {
         sub: admin.id,
         type: TokenType.Admin,
         role: admin.role,
-        permissions: admin.permissions,
+        permissions: withoutRetiredPermissions(admin.permissions),
         tokenVersion: admin.tokenVersion,
         sessionId,
       },
@@ -40,20 +41,6 @@ export class TokenService {
       {
         secret: this.config.getOrThrow<string>('jwt.customerAccessSecret'),
         expiresIn: this.config.getOrThrow<string>('jwt.customerAccessTtl') as never,
-      },
-    );
-  }
-
-  signScreenAccess(screenId: string, tokenVersion: number) {
-    return this.jwtService.signAsync(
-      {
-        sub: screenId,
-        type: TokenType.Screen,
-        tokenVersion,
-      },
-      {
-        secret: this.config.getOrThrow<string>('jwt.screenAccessSecret'),
-        expiresIn: this.config.getOrThrow<string>('jwt.screenAccessTtl') as never,
       },
     );
   }

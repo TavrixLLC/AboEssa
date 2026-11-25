@@ -1,0 +1,14 @@
+// QA invocation only, never included by normal/release builds.
+// The installed Flutter integration_test requests runner 1.2+; 1.3.0 is the
+// already cached satisfying artifact on this host. Avoid dynamic Maven metadata
+// resolution while DNS is unavailable. This is not a production dependency pin.
+allprojects {
+    configurations.configureEach {
+        resolutionStrategy.eachDependency { details ->
+            if (details.requested.group == 'androidx.test' && details.requested.name == 'runner') {
+                details.useVersion('1.3.0')
+                details.because('Offline-only local Phase 6 integration QA with existing cached artifact')
+            }
+        }
+    }
+}

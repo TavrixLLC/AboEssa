@@ -1,0 +1,19 @@
+if (process.env.REZONA_PHASE7_QA !== '1') throw Error('Explicit isolated Phase7 QA only');
+const { spawnSync } = require('node:child_process'), fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
+const root = path.resolve(__dirname, '..');
+function run(exe, args, input) { const r = spawnSync(exe, args, { cwd: root, input, encoding: 'utf8', windowsHide: true, maxBuffer: 128 * 1024 * 1024 }); if (r.status !== 0) throw Error((r.stderr || r.stdout).slice(0, 2000)); return r.stdout; }
+function sql(db, query) { if (!['postgres', 'rezona_phase7_upgrade', 'rezona_phase7_fresh'].includes(db)) throw Error('Not a Phase7 target'); return run('docker', ['exec', '-i', 'rezona-phase7-qa-postgres', 'psql', '-U', 'phase7_qa', '-d', db, '-v', 'ON_ERROR_STOP=1', '-Atc', query]).trim(); }
+const targets = ['rezona_phase7_upgrade', 'rezona_phase7_fresh'];
+for (const db of targets) { if (sql('postgres', `SELECT 1 FROM pg_database WHERE datname='${db}'`)) throw Error('Refusing overwrite existing QA database'); run('docker', ['exec', 'rezona-phase7-qa-postgres', 'createdb', '-U', 'phase7_qa', db]); }
+// READ ONLY on protected Phase 6. All restores, fixtures and migrations write to our own new Phase7 databases.
+const dump = run('docker', ['exec', 'rezona-phase6-qa-postgres', 'pg_dump', '-U', 'phase6_qa', '-d', 'rezona_phase6_qa', '--no-owner', '--no-acl']);
+run('docker', ['exec', '-i', 'rezona-phase7-qa-postgres', 'psql', '-U', 'phase7_qa', '-d', 'rezona_phase7_upgrade', '-v', 'ON_ERROR_STOP=1'], dump);
+const columns = sql('rezona_phase7_upgrade', "SELECT table_name||':'||string_agg(column_name,',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema='public' AND table_name<>'_prisma_migrations' GROUP BY table_name ORDER BY table_name").split('\n').map(x => { const [table, names] = x.split(':'); if (!/^[A-Za-z0-9_,]+$/.test(table + names)) throw Error('Invalid identifier'); return [table, names.split(',')]; });
+// Compare the exact PRE-migration projection. Additive defaults are expected, not lost old fields.
+const fingerprints = () => Object.fromEntries(columns.map(([table, names]) => [table, sql('rezona_phase7_upgrade', `SELECT count(*)||':'||COALESCE(md5(string_agg(h,'' ORDER BY h)),'empty') FROM (SELECT md5(row_to_json(old)::text) h FROM (SELECT ${names.map(x => '"' + x + '"').join(',')} FROM "${table}") old) rows`)]));
+const before = fingerprints(), logs = [];
+for (const db of targets) { const r = spawnSync(process.execPath, [path.join(root, 'node_modules/prisma/build/index.js'), 'migrate', 'deploy'], { cwd: root, encoding: 'utf8', windowsHide: true, env: { ...process.env, DATABASE_URL: `postgresql://phase7_qa:phase7-local-only@127.0.0.1:55450/${db}` } }); if (r.status !== 0) throw Error(r.stderr || r.stdout); logs.push(r.stdout); assert.equal(sql(db, 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL'), '36'); }
+const after = fingerprints(); assert.deepEqual(after, before);
+for (const db of targets) { assert.equal(sql(db, "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename IN ('ProductImageEnhancementJob','ProductImageEnhancementRequest','ProductImageEnhancementCandidate','ProductImageEnhancementDecision')"), '4'); assert.equal(sql(db, "SELECT count(*) FROM pg_constraint WHERE conname='RecognitionUsage_purpose_reference_check'"), '1'); }
+const result = { time: new Date().toISOString(), passed: true, scope: 'Protected Phase6 read-only clone 35→36 + fresh36; writes Phase7 only', oldColumnProjectionTables: columns.length, fingerprintsUnchanged: true, before, after, migrations: { fresh: 36, upgrade: 36 }, logs };
+fs.mkdirSync(path.join(root, 'docs/benchmarks/phase7'), { recursive: true }); fs.writeFileSync(path.join(root, 'docs/benchmarks/phase7/migrations.json'), JSON.stringify(result, null, 2)); console.log(JSON.stringify({ passed: true, tables: columns.length, migrations: result.migrations }));

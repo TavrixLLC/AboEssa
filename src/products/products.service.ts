@@ -16,6 +16,11 @@ import { UpdateProductDto } from 'src/products/dto/update-product.dto';
 import { SalesService } from 'src/sales/sales.service';
 import { SocketsService } from 'src/sockets/sockets.service';
 import { sha256 } from 'src/common/security/hash.util';
+import {
+  InventoryLedger,
+  inventoryError,
+  inventoryRetryable,
+} from 'src/inventory/inventory-ledger';
 
 type ProductWithMobileRelations = Prisma.ProductListingGetPayload<{
   include: {
@@ -37,11 +42,27 @@ export class ProductsService {
   ) {}
 
   async create(dto: CreateProductDto, adminId: string, request: Request) {
+    const product = await this.createInTransaction(this.prisma, dto, adminId);
+    await this.audit(adminId, 'product.created', product.id, dto, request);
+    return this.toProductResponse(product, true);
+  }
+
+  /** Intake may seed ZERO only inside its caller's atomic initial-stock transaction. */
+  async createInTransaction(
+    tx: Prisma.TransactionClient,
+    dto: CreateProductDto,
+    adminId: string,
+    initialInventorySeed = false,
+  ) {
     if (!dto.categoryId)
       throw new AppException('Category is required', 'CATEGORY_REQUIRED', HttpStatus.BAD_REQUEST);
-    await this.ensureActiveCategory(dto.categoryId);
-    const quantity = this.normalizeQuantity(dto.quantity);
-    const product = await this.prisma.productListing.create({
+    const category = await tx.category.findUnique({ where: { id: dto.categoryId } });
+    if (!category)
+      throw new AppException('Category was not found', 'CATEGORY_NOT_FOUND', HttpStatus.NOT_FOUND);
+    if (!category.isActive)
+      throw new AppException('Category is inactive', 'CATEGORY_INACTIVE', HttpStatus.CONFLICT);
+    const quantity = initialInventorySeed ? 0 : this.normalizeQuantity(dto.quantity);
+    return tx.productListing.create({
       data: {
         title: dto.title,
         description: dto.description,
@@ -54,11 +75,10 @@ export class ProductsService {
         soldQuantity: 0,
         status: ProductListingStatus.DRAFT,
         createdByAdminId: adminId,
+        ...(initialInventorySeed ? { inventoryMappedAt: new Date() } : {}),
       },
       include: this.productInclude(),
     });
-    await this.audit(adminId, 'product.created', product.id, dto, request);
-    return this.toProductResponse(product, true);
   }
 
   async findAll(query: ProductQueryDto, customerVisible = false) {
@@ -107,49 +127,54 @@ export class ProductsService {
   }
 
   async update(id: string, dto: UpdateProductDto, adminId: string, request: Request) {
-    const existing = await this.prisma.productListing.findUniqueOrThrow({ where: { id } });
     if (dto.categoryId === '')
       throw new AppException('Category is required', 'CATEGORY_REQUIRED', HttpStatus.BAD_REQUEST);
     if (dto.categoryId) {
       await this.ensureActiveCategory(dto.categoryId);
     }
+    const product = await this.prisma.$transaction(async (tx) => {
+      const existing = await InventoryLedger.lockProduct(tx, id);
+      const data: Prisma.ProductListingUpdateInput = {
+        title: dto.title,
+        description: dto.description,
+        category: dto.categoryId ? { connect: { id: dto.categoryId } } : undefined,
+        imageUrls: dto.imageUrls,
+        price: dto.price,
+        discountPercentage: dto.discountPercentage,
+      };
 
-    const data: Prisma.ProductListingUpdateInput = {
-      title: dto.title,
-      description: dto.description,
-      category: dto.categoryId ? { connect: { id: dto.categoryId } } : undefined,
-      imageUrls: dto.imageUrls,
-      price: dto.price,
-      discountPercentage: dto.discountPercentage,
-    };
+      if (dto.quantity !== undefined) {
+        if (existing.inventoryMappedAt && dto.quantity !== existing.totalQuantity)
+          inventoryError('USE_INVENTORY_OPERATION', 'Mapped stock must use stock-in or adjustment');
+        if (!existing.inventoryMappedAt) {
+          const quantity = this.normalizeQuantity(dto.quantity);
+          const soldQuantity =
+            existing.soldQuantity ?? (existing.status === ProductListingStatus.SOLD ? 1 : 0);
+          if (quantity < soldQuantity) {
+            throw new AppException(
+              'Quantity cannot be lower than sold quantity',
+              'PRODUCT_QUANTITY_BELOW_SOLD',
+              HttpStatus.CONFLICT,
+            );
+          }
+          const availableQuantity = quantity - soldQuantity;
+          data.totalQuantity = quantity;
+          data.availableQuantity = availableQuantity;
+          data.soldQuantity = soldQuantity;
+          if (existing.status === ProductListingStatus.ACTIVE && availableQuantity === 0) {
+            data.status = ProductListingStatus.SOLD;
+          }
+          if (existing.status === ProductListingStatus.SOLD && availableQuantity > 0) {
+            data.status = ProductListingStatus.ACTIVE;
+          }
+        }
+      }
 
-    if (dto.quantity !== undefined) {
-      const quantity = this.normalizeQuantity(dto.quantity);
-      const soldQuantity =
-        existing.soldQuantity ?? (existing.status === ProductListingStatus.SOLD ? 1 : 0);
-      if (quantity < soldQuantity) {
-        throw new AppException(
-          'Quantity cannot be lower than sold quantity',
-          'PRODUCT_QUANTITY_BELOW_SOLD',
-          HttpStatus.CONFLICT,
-        );
-      }
-      const availableQuantity = quantity - soldQuantity;
-      data.totalQuantity = quantity;
-      data.availableQuantity = availableQuantity;
-      data.soldQuantity = soldQuantity;
-      if (existing.status === ProductListingStatus.ACTIVE && availableQuantity === 0) {
-        data.status = ProductListingStatus.SOLD;
-      }
-      if (existing.status === ProductListingStatus.SOLD && availableQuantity > 0) {
-        data.status = ProductListingStatus.ACTIVE;
-      }
-    }
-
-    const product = await this.prisma.productListing.update({
-      where: { id },
-      data,
-      include: this.productInclude(),
+      return tx.productListing.update({
+        where: { id },
+        data,
+        include: this.productInclude(),
+      });
     });
     await this.audit(adminId, 'product.updated', product.id, dto, request);
     return this.toProductResponse(product, true);
@@ -202,15 +227,23 @@ export class ProductsService {
     const quantity = this.normalizeQuantity(dto.quantity);
     let transactionResult: Awaited<ReturnType<typeof this.claimInventoryAndCreateSale>>;
     try {
-      transactionResult = await this.claimInventoryAndCreateSale(
-        productId,
-        customerId,
-        quantity,
-        dto,
-        idempotencyKey,
-      );
+      const claim = () =>
+        this.claimInventoryAndCreateSale(productId, customerId, quantity, dto, idempotencyKey);
+      transactionResult = await (async () => {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            return await claim();
+          } catch (error) {
+            if (idempotencyKey && inventoryRetryable(error) && attempt < 3) {
+              await new Promise((r) => setTimeout(r, 20 * (attempt + 1)));
+              continue;
+            }
+            throw error;
+          }
+        }
+      })();
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
+      if (inventoryRetryable(error)) {
         throw new AppException(
           'Purchase changed concurrently; please retry',
           'PURCHASE_CONFLICT_RETRY',
@@ -220,69 +253,71 @@ export class ProductsService {
       throw error;
     }
 
-    await this.salesService.recordSoldItemSideEffects(
-      {
-        customerId,
-        categoryId: transactionResult.product.categoryId,
-        productListingId: transactionResult.product.id,
-        source: SaleSource.APP_FIXED_PRICE,
-        price: transactionResult.unitPrice,
-        quantity: transactionResult.quantity,
-        title: transactionResult.product.title,
-        shouldCreatePrintJob: false,
-        initialLabelStatus: LabelStatus.PENDING,
-      },
-      transactionResult.sale,
-      {
+    if (!transactionResult.replayed) {
+      await this.salesService.recordSoldItemSideEffects(
+        {
+          customerId,
+          categoryId: transactionResult.product.categoryId,
+          productListingId: transactionResult.product.id,
+          source: SaleSource.APP_FIXED_PRICE,
+          price: transactionResult.unitPrice,
+          quantity: transactionResult.quantity,
+          title: transactionResult.product.title,
+          shouldCreatePrintJob: false,
+          initialLabelStatus: LabelStatus.PENDING,
+        },
+        transactionResult.sale,
+        {
+          actorType: ActorType.CUSTOMER,
+          actorId: customerId,
+          ip: request.ip,
+          userAgent: request.headers['user-agent'],
+        },
+        'product.sold',
+      );
+
+      this.sockets.emitToAdmins(
+        'shipping_request_created',
+        transactionResult.checkout.shipmentRequest,
+      );
+      await this.auditLogs.create({
         actorType: ActorType.CUSTOMER,
         actorId: customerId,
+        action: 'product.checkout_confirmed',
+        entityType: 'OrderItem',
+        entityId: transactionResult.sale.items[0].id,
+        metadata: {
+          productId,
+          paymentMethod: dto.paymentMethod,
+          walletPaidAmount: transactionResult.checkout.walletPaid.toFixed(2),
+          cashDueAmount: transactionResult.checkout.cashDue.toFixed(2),
+        },
         ip: request.ip,
         userAgent: request.headers['user-agent'],
-      },
-      'product.sold',
-    );
+      });
 
-    this.sockets.emitToAdmins(
-      'shipping_request_created',
-      transactionResult.checkout.shipmentRequest,
-    );
-    await this.auditLogs.create({
-      actorType: ActorType.CUSTOMER,
-      actorId: customerId,
-      action: 'product.checkout_confirmed',
-      entityType: 'OrderItem',
-      entityId: transactionResult.sale.items[0].id,
-      metadata: {
+      this.sockets.emitToAdmins('product_sold', {
         productId,
-        paymentMethod: dto.paymentMethod,
-        walletPaidAmount: transactionResult.checkout.walletPaid.toFixed(2),
-        cashDueAmount: transactionResult.checkout.cashDue.toFixed(2),
-      },
-      ip: request.ip,
-      userAgent: request.headers['user-agent'],
-    });
-
-    this.sockets.emitToAdmins('product_sold', {
-      productId,
-      customerId,
-      orderItemId: transactionResult.sale.items[0].id,
-      quantity: transactionResult.quantity,
-      remainingQuantity: transactionResult.remainingQuantity,
-    });
-    this.sockets.emitToCustomers('product_sold', {
-      productId,
-      orderItemId: transactionResult.sale.items[0].id,
-      quantity: transactionResult.quantity,
-      remainingQuantity: transactionResult.remainingQuantity,
-      soldAt: transactionResult.sale.items[0].soldAt.toISOString(),
-    });
-    await this.notifications.createForCustomer({
-      customerId,
-      type: 'ORDER_UPDATED',
-      title: 'Product purchased',
-      body: transactionResult.product.title,
-      data: { productId, orderItemId: transactionResult.sale.items[0].id },
-    });
+        customerId,
+        orderItemId: transactionResult.sale.items[0].id,
+        quantity: transactionResult.quantity,
+        remainingQuantity: transactionResult.remainingQuantity,
+      });
+      this.sockets.emitToCustomers('product_sold', {
+        productId,
+        orderItemId: transactionResult.sale.items[0].id,
+        quantity: transactionResult.quantity,
+        remainingQuantity: transactionResult.remainingQuantity,
+        soldAt: transactionResult.sale.items[0].soldAt.toISOString(),
+      });
+      await this.notifications.createForCustomer({
+        customerId,
+        type: 'ORDER_UPDATED',
+        title: 'Product purchased',
+        body: transactionResult.product.title,
+        data: { productId, orderItemId: transactionResult.sale.items[0].id },
+      });
+    }
 
     const product = await this.prisma.productListing.findUniqueOrThrow({
       where: { id: productId },
@@ -328,7 +363,53 @@ export class ProductsService {
   ) {
     return this.prisma.$transaction(
       async (tx) => {
-        const product = await tx.productListing.findUnique({ where: { id: productId } });
+        const attempt = idempotencyKey
+          ? await InventoryLedger.operation(
+              tx,
+              `BUY:${customerId}`,
+              idempotencyKey,
+              'PRODUCT_PURCHASE',
+              { productId, quantity, paymentMethod: dto.paymentMethod, delivery: dto.delivery },
+              ActorType.CUSTOMER,
+              customerId,
+            )
+          : null;
+        const product = await InventoryLedger.lockProduct(tx, productId);
+        if (attempt?.replayed) {
+          const outcome = attempt.operation.outcome as {
+            orderId: string;
+            unitPrice: string;
+            remainingQuantity: number;
+            quantity: number;
+          };
+          const order = await tx.order.findUniqueOrThrow({
+            where: { id: outcome.orderId },
+            include: { items: true, customer: true },
+          });
+          const shipmentRequest = await tx.shipmentRequest.findFirstOrThrow({
+            where: { requestedItemIds: { has: order.items[0].id } },
+            orderBy: { createdAt: 'asc' },
+          });
+          return {
+            product,
+            replayed: true,
+            quantity: outcome.quantity,
+            remainingQuantity: outcome.remainingQuantity,
+            unitPrice: new Prisma.Decimal(outcome.unitPrice),
+            sale: {
+              customer: toSafeCustomer(order.customer),
+              order,
+              items: order.items,
+              labelPrintJobs: [],
+              labelPayloads: [],
+            },
+            checkout: {
+              shipmentRequest,
+              walletPaid: new Prisma.Decimal(shipmentRequest.walletPaidAmount ?? 0),
+              cashDue: new Prisma.Decimal(shipmentRequest.cashDueAmount ?? 0),
+            },
+          };
+        }
         if (!product) {
           throw new AppException(
             'Product was not found',
@@ -407,6 +488,8 @@ export class ProductsService {
             : `product-buy:${sale.items[0].id}`,
         });
 
+        await InventoryLedger.reserve(tx, product, sale.items, customerId);
+
         if (!product.soldOrderItemId) {
           await tx.productListing.update({
             where: { id: product.id },
@@ -414,8 +497,16 @@ export class ProductsService {
           });
         }
 
+        if (attempt)
+          await InventoryLedger.finish(tx, attempt.operation.id, {
+            orderId: sale.items[0].orderId,
+            unitPrice: unitPrice.toFixed(2),
+            remainingQuantity,
+            quantity,
+          });
         return {
           product,
+          replayed: false,
           sale: {
             ...sale,
             items: checkout.updatedItems ?? sale.items,

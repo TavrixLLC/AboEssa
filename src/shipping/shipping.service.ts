@@ -1,4 +1,5 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
+import { InventoryLedger } from 'src/inventory/inventory-ledger';
 import {
   ActorType,
   LabelStatus,
@@ -180,6 +181,10 @@ export class ShippingService {
     const result = await this.prisma.$transaction(async (tx) => {
       const req = await tx.shipmentRequest.findUniqueOrThrow({ where: { id } });
       this.assertTransition(req.status, ShippingRequestStatus.SHIPPED);
+      const stockItems = await tx.orderItem.findMany({
+        where: { id: { in: req.requestedItemIds } },
+      });
+      await InventoryLedger.settleItems(tx, stockItems, id, 'SHIP', adminId, 'ShipmentRequest');
       const shipment = await tx.shipment.create({
         data: {
           customerId: req.customerId,

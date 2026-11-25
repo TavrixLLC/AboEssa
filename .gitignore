@@ -4,6 +4,14 @@ coverage
 .env
 .env.*
 !.env.example
+!.env.phase7.example
+!.env.phase7-2-fal.example
+!.env.phase7-3-style.example
+!.env.phase7-3-1.example
+!.env.premium-3d.example
+!.env.studio20.example
+!.env.real-studio-review.example
+!.env.prepaid-studio.example
 /uploads
 /backups
 *.log
@@ -14,3 +22,21 @@ coverage
 *.pfx
 firebase-admin*.json
 *service-account*.json
+
+# Private QA evidence is retained locally, not published to the public repository.
+/docs/benchmarks/*
+!/docs/benchmarks/README.md
+*.dpapi
+*.jks
+*.keystore
+*.apk
+*.aab
+*.apks
+*.dump
+*.onnx
+*.perfetto-trace
+*.trace
+*.tar
+*.tar.gz
+**/key.properties
+**/local.properties

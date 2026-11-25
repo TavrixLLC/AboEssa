@@ -10,7 +10,8 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { ActorType } from '@prisma/client';
+import { ActorType, Prisma } from '@prisma/client';
+import { inventoryHash } from 'src/inventory/inventory-ledger';
 import {
   ApiBearerAuth,
   ApiConflictResponse,
@@ -167,7 +168,12 @@ export class ProductsController {
   ) {
     const key = this.idempotencyService.requireKey(headers);
     const endpoint = `${request.method}:${request.path}:${id}`;
-    const requestHash = this.idempotencyService.hashBody({ id, quantity: dto.quantity ?? 1 });
+    const requestHash = inventoryHash({
+      id,
+      quantity: dto.quantity ?? 1,
+      paymentMethod: dto.paymentMethod,
+      delivery: dto.delivery,
+    });
     const replay = await this.idempotencyService.getReplayOrThrowConflict({
       key,
       actorType: ActorType.CUSTOMER,
@@ -179,16 +185,28 @@ export class ProductsController {
       return replay;
     }
     const response = await this.productsService.buy(id, user.id, request, dto, key);
-    await this.idempotencyService.store({
-      key,
-      actorType: ActorType.CUSTOMER,
-      actorId: user.id,
-      endpoint,
-      requestHash,
-      responseJson: response,
-      statusCode: 201,
-      expiresAt: this.idempotencyService.getExpiryDate(),
-    });
+    try {
+      await this.idempotencyService.store({
+        key,
+        actorType: ActorType.CUSTOMER,
+        actorId: user.id,
+        endpoint,
+        requestHash,
+        responseJson: response,
+        statusCode: 201,
+        expiresAt: this.idempotencyService.getExpiryDate(),
+      });
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002'))
+        throw error;
+      return this.idempotencyService.getReplayOrThrowConflict({
+        key,
+        actorType: ActorType.CUSTOMER,
+        actorId: user.id,
+        endpoint,
+        requestHash,
+      });
+    }
     return response;
   }
 }

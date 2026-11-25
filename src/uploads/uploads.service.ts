@@ -3,6 +3,13 @@ import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppException } from 'src/common/exceptions/app.exception';
 import { STORAGE_PROVIDER, StorageProvider } from 'src/files/storage-provider.interface';
+import { ImageInputError, inspectImage } from 'src/image-optimization/image-codec';
+import {
+  DEFAULT_IMAGE_PIXELS,
+  IMAGE_RECIPE,
+  MAX_IMAGE_BYTES,
+  SOURCE_KEY,
+} from 'src/image-optimization/image-recipe';
 import {
   UPLOAD_IMAGE_FOLDERS,
   UploadImageDto,
@@ -26,6 +33,8 @@ const EXTENSIONS_BY_MIME: Record<string, string> = {
 
 @Injectable()
 export class UploadsService {
+  private decodes = 0;
+
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
@@ -36,6 +45,7 @@ export class UploadsService {
     file: UploadedImageFile | undefined,
     dto: UploadImageDto,
     adminId: string,
+    intake?: { key: string },
   ): Promise<UploadImageResultDto> {
     if (!file?.buffer) {
       throw new AppException('Image file is required', 'IMAGE_FILE_REQUIRED');
@@ -55,7 +65,10 @@ export class UploadsService {
       );
     }
 
-    const maxBytes = this.config.get<number>('upload.maxBytes') ?? 5_242_880;
+    const maxBytes = Math.min(
+      this.config.get<number>('upload.maxBytes') ?? 5_242_880,
+      MAX_IMAGE_BYTES,
+    );
     if (file.size > maxBytes || file.buffer.length > maxBytes) {
       throw new AppException(
         'Image exceeds the maximum upload size',
@@ -66,12 +79,15 @@ export class UploadsService {
     }
 
     const folder = this.resolveFolder(dto.folder);
-    const key = `${folder}/${randomUUID()}.${extension}`;
+    await this.validateImage(file);
+    const key = intake?.key ?? `${folder}/${randomUUID()}.${extension}`;
+    if (intake && !new RegExp(`^products/intake-[a-f0-9]{64}\\.${extension}$`).test(key))
+      throw new AppException('Invalid private intake key', 'INVALID_INTAKE_KEY');
     const stored = await this.storage.putObject({
       key,
       body: file.buffer,
       mimeType: file.mimetype,
-      size: file.size,
+      size: file.buffer.length,
     });
 
     try {
@@ -82,6 +98,10 @@ export class UploadsService {
           mimeType: stored.mimeType,
           size: stored.size,
           uploadedByAdminId: adminId,
+          ...(intake ? { intakePrivate: true } : {}),
+          ...(this.config.get<boolean>('imageOptimization.enabled') === true && SOURCE_KEY.test(key)
+            ? { imageJobs: { create: { recipeVersion: IMAGE_RECIPE } } }
+            : {}),
         },
         select: {
           url: true,
@@ -91,8 +111,54 @@ export class UploadsService {
         },
       });
     } catch (error) {
+      if (intake) {
+        // Concurrent retries write identical content-addressed bytes. Never remove
+        // an object that another request may already have committed/referenced.
+        const prior = await this.prisma.fileAsset.findUnique({
+          where: { key },
+          select: {
+            url: true,
+            key: true,
+            mimeType: true,
+            size: true,
+            uploadedByAdminId: true,
+            intakePrivate: true,
+          },
+        });
+        if (prior?.intakePrivate && prior.uploadedByAdminId === adminId) return prior;
+        throw error;
+      }
       await this.storage.removeObject(key).catch(() => undefined);
       throw error;
+    }
+  }
+
+  private async validateImage(file: UploadedImageFile) {
+    if (this.decodes >= 2) {
+      throw new AppException(
+        'Image validator is busy; retry shortly',
+        'IMAGE_VALIDATOR_BUSY',
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
+    this.decodes++;
+    try {
+      await inspectImage(
+        file.buffer,
+        file.mimetype,
+        this.config.get<number>('imageOptimization.maxPixels') ?? DEFAULT_IMAGE_PIXELS,
+      );
+    } catch (error) {
+      if (!(error instanceof ImageInputError)) throw error;
+      const status =
+        error.code === 'IMAGE_TOO_LARGE'
+          ? HttpStatus.PAYLOAD_TOO_LARGE
+          : error.code === 'UNSUPPORTED_IMAGE_TYPE'
+            ? HttpStatus.UNSUPPORTED_MEDIA_TYPE
+            : HttpStatus.UNPROCESSABLE_ENTITY;
+      throw new AppException('Image could not be accepted', error.code, status);
+    } finally {
+      this.decodes--;
     }
   }
 

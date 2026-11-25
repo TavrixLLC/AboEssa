@@ -104,7 +104,8 @@ export const envValidationSchema = Joi.object({
     then: Joi.string()
       .uri({ scheme: ['postgresql', 'postgres'] })
       .custom(
-        (value, helpers) => validateProductionServiceUrl(value, helpers, true),
+        (value: string, helpers: Joi.CustomHelpers<string>) =>
+          validateProductionServiceUrl(value, helpers, true),
         'production database URL validation',
       )
       .required(),
@@ -117,7 +118,8 @@ export const envValidationSchema = Joi.object({
     then: Joi.string()
       .uri({ scheme: ['redis', 'rediss'] })
       .custom(
-        (value, helpers) => validateProductionServiceUrl(value, helpers, true),
+        (value: string, helpers: Joi.CustomHelpers<string>) =>
+          validateProductionServiceUrl(value, helpers, true),
         'production Redis URL validation',
       )
       .required(),
@@ -136,14 +138,8 @@ export const envValidationSchema = Joi.object({
     then: productionJwtSecret,
     otherwise: Joi.string().min(32).required(),
   }),
-  JWT_SCREEN_ACCESS_SECRET: Joi.when('NODE_ENV', {
-    is: 'production',
-    then: productionJwtSecret,
-    otherwise: Joi.string().min(32).required(),
-  }),
   JWT_ADMIN_ACCESS_TTL: Joi.string().pattern(ttlPattern).default('15m'),
   JWT_CUSTOMER_ACCESS_TTL: Joi.string().pattern(ttlPattern).default('15m'),
-  JWT_SCREEN_ACCESS_TTL: Joi.string().pattern(ttlPattern).default('365d'),
   REFRESH_TOKEN_DAYS: Joi.number().integer().min(1).default(30),
   CORS_ORIGINS: Joi.when('NODE_ENV', {
     is: 'production',
@@ -166,11 +162,26 @@ export const envValidationSchema = Joi.object({
   THROTTLE_TTL_MS: Joi.number().integer().min(1000).default(60000),
   THROTTLE_LIMIT: Joi.number().integer().min(1).default(120),
   IDEMPOTENCY_TTL_SECONDS: Joi.number().integer().min(60).default(86400),
-  SCREEN_PAIRING_TTL_SECONDS: Joi.number().integer().min(60).max(900).default(300),
-  SCREEN_ONLINE_WINDOW_SECONDS: Joi.number().integer().min(30).max(600).default(120),
   UPLOAD_MAX_BYTES: Joi.number().integer().min(1).default(5242880),
   UPLOAD_ALLOWED_MIME: Joi.string().default('image/jpeg,image/png,image/webp'),
   LOCAL_UPLOAD_DIR: Joi.string().default('uploads'),
+  IMAGE_OPTIMIZATION_ENABLED: Joi.boolean().default(false),
+  INVENTORY_MANAGEMENT_ENABLED: Joi.boolean().default(false),
+  RAPID_PRODUCT_INTAKE_ENABLED: Joi.boolean().default(false),
+  // Separate Stage A template browser from Stage B external dispatch.
+  PRODUCT_STUDIO_DISPATCH_ENABLED: Joi.string().valid('true', 'false').default('false'),
+  REAL_PRODUCT_STUDIO_REVIEW_ENABLED: Joi.when('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().valid('false').default('false'),
+    otherwise: Joi.string().valid('true', 'false').optional(),
+  }),
+  PRODUCT_STUDIO_PREPAID_EXPERIMENT: Joi.when('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().valid('false').default('false'),
+    otherwise: Joi.string().valid('true', 'false').optional(),
+  }),
+  IMAGE_MAX_PIXELS: Joi.number().integer().min(1_048_576).max(20_000_000).default(12_000_000),
+  IMAGE_OPTIMIZATION_CONCURRENCY: Joi.number().integer().min(1).max(3).default(1),
   PUBLIC_BASE_URL: Joi.when('NODE_ENV', {
     is: 'production',
     then: Joi.string()

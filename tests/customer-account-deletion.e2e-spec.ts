@@ -26,10 +26,35 @@ suite('Account deletion / real HTTP + Postgres + Argon2', () => {
   const previousSecret = process.env.JWT_CUSTOMER_ACCESS_SECRET;
   beforeAll(async () => {
     const target = new URL(url!);
+    const realStudio=process.env.REZONA_REAL_STUDIO_QA==='1'&&target.hostname==='127.0.0.1'&&target.port==='55456'&&/^\/rezona_real_studio_reg_[a-f0-9]{8}$/.test(target.pathname);
+    const studio20=process.env.REZONA_STUDIO20_QA==='1'&&target.hostname==='127.0.0.1'&&target.port==='55455'&&/^\/rezona_studio20_reg_[a-f0-9]{8}$/.test(target.pathname);
+    const phase72 = process.env.REZONA_PHASE72_QA === '1' && target.hostname === '127.0.0.1' && target.port === '55454' && target.pathname === '/rezona_phase72_e2e';
+    const phase71 = process.env.REZONA_PHASE71_QA === '1' && target.hostname === '127.0.0.1' && target.port === '55452' && target.pathname === '/rezona_phase71_qa';
+    const phase7 = process.env.REZONA_PHASE7_QA === '1' && target.hostname === '127.0.0.1' && target.port === '55450' && target.pathname === '/rezona_phase7_qa';
+    const phase6 = process.env.REZONA_PHASE6_QA === '1' && target.hostname === '127.0.0.1' &&
+      target.port === '55448' && target.pathname === '/rezona_phase6_qa';
+    const phase5 =
+      process.env.REZONA_PHASE5_QA === '1' &&
+      target.hostname === '127.0.0.1' &&
+      target.port === '55446' &&
+      target.pathname === '/rezona_phase5_qa';
+    const phase4 =
+      process.env.REZONA_PHASE4_QA === '1' &&
+      target.hostname === '127.0.0.1' &&
+      target.port === '55444' &&
+      target.pathname === '/rezona_phase4_qa';
     if (
-      target.hostname !== '127.0.0.1' ||
-      target.port !== '55439' ||
-      target.pathname !== '/rezona_admin_qa'
+      !phase4 &&
+      !phase5 &&
+      !phase6 &&
+      !phase7 &&
+      !phase71 &&
+      !phase72 &&
+      !studio20 &&
+      !realStudio &&
+      (target.hostname !== '127.0.0.1' ||
+        target.port !== '55439' ||
+        target.pathname !== '/rezona_admin_qa')
     ) {
       throw new Error('Refusing account-deletion tests outside the isolated local QA database');
     }

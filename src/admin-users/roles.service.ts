@@ -5,6 +5,7 @@ import { AuditLogsService } from 'src/audit-logs/audit-logs.service';
 import { PERMISSIONS } from 'src/common/constants/permissions.constants';
 import { AppException } from 'src/common/exceptions/app.exception';
 import { PermissionResolverService } from 'src/permissions/permission-resolver.service';
+import { withoutRetiredPermissions } from 'src/permissions/permission-resolution';
 import { PERMISSIONS_CATALOG } from 'src/permissions/permissions.catalog';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { SocketsService } from 'src/sockets/sockets.service';
@@ -31,7 +32,7 @@ export class RolesService {
   }
 
   private async keys(keys: string[] | undefined, actorId: string) {
-    const unique = [...new Set(keys ?? [])].sort();
+    const unique = [...new Set(withoutRetiredPermissions(keys))].sort();
     const invalid = unique.filter((key) => !catalogKeys.has(key));
     if (invalid.length) throw new AppException('One or more permission keys are invalid', 'INVALID_PERMISSION_KEY', HttpStatus.BAD_REQUEST, { invalid });
     const actor = await this.actor(actorId);
@@ -45,7 +46,7 @@ export class RolesService {
   }
 
   private response(role: any) {
-    return { id: role.id, name: role.name, description: role.description, isSystem: role.isSystem, isActive: role.isActive, permissionKeys: [...role.permissionKeys].sort(), staffCount: role._count?.staffAssignments ?? role.staffAssignments?.length ?? 0, createdAt: role.createdAt, updatedAt: role.updatedAt };
+    return { id: role.id, name: role.name, description: role.description, isSystem: role.isSystem, isActive: role.isActive, permissionKeys: withoutRetiredPermissions(role.permissionKeys).sort(), staffCount: role._count?.staffAssignments ?? role.staffAssignments?.length ?? 0, createdAt: role.createdAt, updatedAt: role.updatedAt };
   }
 
   async findAll() {

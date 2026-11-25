@@ -7,6 +7,10 @@ export type PermissionResolutionInput = {
   directDenies?: string[];
 };
 
+// Keep old stored role assignments editable without bringing back display access.
+export const withoutRetiredPermissions = (keys: readonly string[] = []): string[] =>
+  keys.filter((key) => key !== 'screens.manage');
+
 /** Deterministic RBAC resolution: role grants + direct grants - direct denies. */
 export const resolveEffectivePermissions = (input: PermissionResolutionInput): string[] => {
   if (input.owner) {
@@ -19,5 +23,5 @@ export const resolveEffectivePermissions = (input: PermissionResolutionInput): s
   }
   for (const permission of input.directGrants ?? []) grants.add(permission);
   for (const permission of input.directDenies ?? []) grants.delete(permission);
-  return [...grants].sort();
+  return withoutRetiredPermissions([...grants]).sort();
 };

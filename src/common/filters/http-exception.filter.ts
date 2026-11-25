@@ -27,6 +27,9 @@ export class HttpExceptionFilter implements ExceptionFilter {
       success: false,
       error: message,
       code,
+      ...(code === 'AI_DUPLICATE_REVIEW_REQUIRED' && exception instanceof HttpException
+        ? { details: (exception.getResponse() as { details?: unknown }).details }
+        : {}),
       requestId: request.requestId ?? response.getHeader('x-request-id') ?? 'unknown',
     });
   }

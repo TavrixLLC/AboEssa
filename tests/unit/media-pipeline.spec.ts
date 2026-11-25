@@ -69,7 +69,11 @@ describe('media response contract', () => {
     response.status = jest.fn().mockReturnValue(response);
     response.setHeader = jest.fn();
 
-    await new MediaController(storage as any).getMedia('products', 'item.webp', response as any);
+    await new MediaController(storage as any, {} as any, {} as any).getMedia(
+      'products',
+      'item.webp',
+      response as any,
+    );
 
     expect(storage.getObject).toHaveBeenCalledWith('products/item.webp');
     expect(response.setHeader).toHaveBeenCalledWith('Content-Type', 'image/webp');

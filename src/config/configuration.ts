@@ -1,4 +1,6 @@
 export default () => ({
+  intake: {enabled:process.env.RAPID_PRODUCT_INTAKE_ENABLED==='true'},
+  inventory: { managementEnabled: process.env.INVENTORY_MANAGEMENT_ENABLED === 'true' },
   app: {
     nodeEnv: process.env.NODE_ENV ?? 'development',
     port: Number(process.env.PORT ?? 3000),
@@ -22,15 +24,9 @@ export default () => ({
   jwt: {
     adminAccessSecret: process.env.JWT_ADMIN_ACCESS_SECRET,
     customerAccessSecret: process.env.JWT_CUSTOMER_ACCESS_SECRET,
-    screenAccessSecret: process.env.JWT_SCREEN_ACCESS_SECRET,
     adminAccessTtl: process.env.JWT_ADMIN_ACCESS_TTL ?? '15m',
     customerAccessTtl: process.env.JWT_CUSTOMER_ACCESS_TTL ?? '15m',
-    screenAccessTtl: process.env.JWT_SCREEN_ACCESS_TTL ?? '365d',
     refreshTokenDays: Number(process.env.REFRESH_TOKEN_DAYS ?? 30),
-  },
-  screens: {
-    pairingTtlSeconds: Number(process.env.SCREEN_PAIRING_TTL_SECONDS ?? 300),
-    onlineWindowSeconds: Number(process.env.SCREEN_ONLINE_WINDOW_SECONDS ?? 120),
   },
   throttle: {
     ttl: Number(process.env.THROTTLE_TTL_MS ?? 60000),
@@ -46,6 +42,11 @@ export default () => ({
       .map((mime) => mime.trim())
       .filter(Boolean),
     localDir: process.env.LOCAL_UPLOAD_DIR ?? 'uploads',
+  },
+  imageOptimization: {
+    enabled: process.env.IMAGE_OPTIMIZATION_ENABLED === 'true',
+    maxPixels: Number(process.env.IMAGE_MAX_PIXELS ?? 12000000),
+    concurrency: Number(process.env.IMAGE_OPTIMIZATION_CONCURRENCY ?? 1),
   },
   storage: {
     minio: {

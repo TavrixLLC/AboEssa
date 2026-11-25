@@ -29,7 +29,7 @@
       form.reset();
       form.hidden = true;
       status.className = 'status success';
-      status.textContent = 'تم حذف حساب شناشيل وبياناته الشخصية بنجاح.';
+      status.textContent = 'تم حذف حساب ريزونا وبياناته الشخصية بنجاح.';
       form.insertAdjacentElement('afterend', status);
     } catch (_) {
       status.className = 'status error';

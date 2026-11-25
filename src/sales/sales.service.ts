@@ -15,7 +15,6 @@ import {
 } from '@prisma/client';
 import { Request } from 'express';
 import { AuditLogsService } from 'src/audit-logs/audit-logs.service';
-import { APP_SETTINGS_ID } from 'src/common/constants/app.constants';
 import { AppException } from 'src/common/exceptions/app.exception';
 import { normalizePhone } from 'src/common/utils/phone.util';
 import { toSafeCustomer } from 'src/common/utils/safe-user.util';
@@ -53,7 +52,6 @@ export type CreateSoldItemInput = {
   liveOfferId?: string;
   shouldCreatePrintJob?: boolean;
   initialLabelStatus?: LabelStatus;
-  isQuickSale?: boolean;
   dedicatedOrder?: boolean;
   // Internal settlement of a bid placed before an account was blocked.
   fulfillExistingCommitment?: boolean;
@@ -66,7 +64,6 @@ export type SaleResult = {
   labelPrintJobs: Awaited<ReturnType<PrismaService['labelPrintJob']['findMany']>>;
   labelPayloads: LabelPayload[];
   session?: { id: string; totalAmount: Prisma.Decimal; numberOfSales: number } | null;
-  quickSaleDisplayRecord?: { id: string } | null;
 };
 
 @Injectable()
@@ -120,7 +117,6 @@ export class SalesService {
         liveSessionId: dto.salesSessionId,
         shouldCreatePrintJob: dto.printNow ?? false,
         initialLabelStatus: LabelStatus.PENDING,
-        isQuickSale: true,
       },
       {
         actorType: ActorType.ADMIN,
@@ -174,22 +170,10 @@ export class SalesService {
     }
 
     const now = new Date();
-    const [settings, customer] = await Promise.all([
-      tx.appSettings.upsert({
-        where: { id: APP_SETTINGS_ID },
-        create: {
-          id: APP_SETTINGS_ID,
-          storeName: 'شناشيل',
-          currency: 'IQD',
-          labelTemplate: {},
-        },
-        update: {},
-      }),
-      tx.customer.findUnique({
-        where: { id: input.customerId },
-        include: { referralAttribution: { include: { referralCode: true } } },
-      }),
-    ]);
+    const customer = await tx.customer.findUnique({
+      where: { id: input.customerId },
+      include: { referralAttribution: { include: { referralCode: true } } },
+    });
 
     if (!customer) {
       throw new AppException('Customer was not found', 'CUSTOMER_NOT_FOUND', HttpStatus.NOT_FOUND);
@@ -319,17 +303,6 @@ export class SalesService {
     const session = input.liveSessionId
       ? await tx.liveSession.findUnique({ where: { id: input.liveSessionId } })
       : null;
-    const quickSaleDisplayRecord = input.isQuickSale
-      ? await tx.quickSaleDisplayRecord.create({
-          data: {
-            customerDisplayName: updatedCustomer.displayName,
-            amount: totalAmount,
-            currency: settings.currency,
-            createdAt: now,
-          },
-          select: { id: true },
-        })
-      : null;
 
     return {
       customer: toSafeCustomer(updatedCustomer),
@@ -338,7 +311,6 @@ export class SalesService {
       labelPrintJobs,
       labelPayloads,
       session,
-      quickSaleDisplayRecord,
     };
   }
 
@@ -351,9 +323,6 @@ export class SalesService {
     await this.writeSaleAudit(primaryAuditAction, input, result.items, context);
     await this.writePrintJobAudit(result.labelPrintJobs, context);
     this.emitSaleEvents(result, input);
-    if (result.quickSaleDisplayRecord) {
-      this.sockets.emitQuickSaleDisplayUpdated(result.quickSaleDisplayRecord.id);
-    }
   }
 
   toPublicSaleResult(result: SaleResult) {

@@ -30,7 +30,6 @@ Token type determines the default room:
 
 - Admin access token joins `admins`.
 - Customer access token joins `customers` and `customer:{customerId}`.
-- Screen access token joins `screens`.
 
 Invalid, expired, blocked, inactive, or revoked tokens are disconnected.
 
@@ -44,11 +43,6 @@ Customer rooms:
 Admin rooms:
 
 - `admins`: admin app receives product, auction, sale, label, and shipping updates.
-
-Screen rooms:
-
-- `screens`: active screen devices receive display-oriented sale/session events.
-- Screens also support `join_screen_room`; active screen tokens already join `screens` on connect.
 
 ## Events
 
@@ -200,19 +194,17 @@ Refresh:
 
 ### `last_sale_updated`
 
-Emitted after a sale for admin dashboards and screens.
+Emitted after a sale for admin dashboards.
 
 Rooms:
 
 - `admins`
-- `screens`
 
 Payload: same sale payload shape as `order_item_sold`.
 
 Refresh:
 
 - Admin app: `GET /api/admin/dashboard/stats`.
-- Screen app: refresh its current display state, if any.
 
 ### `label_job_updated`
 
@@ -238,7 +230,7 @@ Refresh:
 
 ## Other Current Events
 
-The backend also emits these admin/screen events:
+The backend also emits these admin events:
 
 - `shipping_request_created`
 - `shipment_updated`

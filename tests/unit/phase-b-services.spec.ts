@@ -19,7 +19,6 @@ import { WarehouseService } from 'src/warehouse/warehouse.service';
 const auditLogs = () => ({ create: jest.fn().mockResolvedValue({}) });
 const sockets = () => ({
   emitSale: jest.fn(),
-  emitQuickSaleDisplayUpdated: jest.fn(),
   emitLabelJobUpdated: jest.fn(),
   emitSessionUpdated: jest.fn(),
   emitSessionEnded: jest.fn(),
@@ -132,9 +131,6 @@ describe('SalesService', () => {
         }),
       },
       commissionLedger: { create: jest.fn() },
-      quickSaleDisplayRecord: {
-        create: jest.fn().mockResolvedValue({ id: 'display-sale-1' }),
-      },
     };
     const prisma = {
       $transaction: jest.fn().mockImplementation((callback) => callback(tx)),
@@ -270,66 +266,14 @@ describe('SalesService', () => {
     expect(result.items[0].price.toString()).toBe('0');
   });
 
-  it('persists and emits a safe display refresh after a successful manual-name Quick Sale', async () => {
-    const { service, tx, socketEvents } = makeSalesHarness({
-      displayName: 'Ali',
-      limit: 500000,
-    });
-
-    await service.createSoldItem(
-      {
-        customerId: 'customer-1',
-        source: SaleSource.ADMIN_MANUAL,
-        price: 250000,
-        isQuickSale: true,
-      },
+  it('records a manual sale and keeps the normal sales event', async () => {
+    const { service, socketEvents } = makeSalesHarness({ limit: 500000 });
+    const result = await service.createSoldItem(
+      { customerId: 'customer-1', source: SaleSource.ADMIN_MANUAL, price: 250000 },
       { actorType: ActorType.ADMIN, actorId: 'admin-1' },
     );
-
-    expect(tx.quickSaleDisplayRecord.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          customerDisplayName: 'Ali',
-          amount: expect.any(Prisma.Decimal),
-          currency: 'IQD',
-        }),
-      }),
-    );
-    expect(socketEvents.emitQuickSaleDisplayUpdated).toHaveBeenCalledWith('display-sale-1');
-  });
-
-  it('uses the existing Customer display name in the Quick Sale display record', async () => {
-    const { service, tx } = makeSalesHarness({ displayName: 'Ahmed' });
-    await service.createSoldItem(
-      {
-        customerId: 'customer-1',
-        source: SaleSource.ADMIN_MANUAL,
-        price: 12000,
-        isQuickSale: true,
-      },
-      { actorType: ActorType.ADMIN, actorId: 'admin-1' },
-    );
-    expect(tx.quickSaleDisplayRecord.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ customerDisplayName: 'Ahmed' }),
-      }),
-    );
-  });
-
-  it('does not emit a display refresh when Quick Sale persistence fails', async () => {
-    const { service, socketEvents } = makeSalesHarness({ blocked: true });
-    await expect(
-      service.createSoldItem(
-        {
-          customerId: 'customer-1',
-          source: SaleSource.ADMIN_MANUAL,
-          price: 12000,
-          isQuickSale: true,
-        },
-        { actorType: ActorType.ADMIN, actorId: 'admin-1' },
-      ),
-    ).rejects.toMatchObject({ code: 'CUSTOMER_BLOCKED' });
-    expect(socketEvents.emitQuickSaleDisplayUpdated).not.toHaveBeenCalled();
+    expect(result.items[0].price.toString()).toBe('250000');
+    expect(socketEvents.emitSale).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -6,7 +6,6 @@ const secureProductionEnvironment = () => ({
   REDIS_URL: 'redis://:correct-horse-battery-staple@redis:6379',
   JWT_ADMIN_ACCESS_SECRET: 'admin-7B2vJ8qL4xN9mK6pR3tY5uW1aC8dF0hZ',
   JWT_CUSTOMER_ACCESS_SECRET: 'customer-9K4mP7sT2wX6bD1fH8jL3nQ5rV0yC',
-  JWT_SCREEN_ACCESS_SECRET: 'screen-5M8qR2vX7cL1nD9hK4pT6wY3bF0sJ',
   CORS_ORIGINS: 'https://admin.example.com',
   PUBLIC_BASE_URL: 'https://api.example.com',
   PUSH_PROVIDER: 'disabled',

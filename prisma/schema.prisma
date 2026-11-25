@@ -307,6 +307,7 @@ model AdminUser {
   deactivatedStaff AdminUser[]     @relation("AdminDeactivatedStaff")
   roleAssignments  AdminUserRole[]
   sessions         AdminSession[]
+  intakeSessions   ProductIntakeSession[]
 
   createdOrderItems      OrderItem[]            @relation("OrderItemCreatedBy")
   verificationReviews    VerificationRequest[]  @relation("VerificationReviewedBy")
@@ -633,6 +634,7 @@ model OrderItem {
   createdByAdmin     AdminUser?         @relation("OrderItemCreatedBy", fields: [createdByAdminId], references: [id], onDelete: SetNull)
   printJobs          LabelPrintJob[]
   commissionEntries  CommissionLedger[]
+  inventoryAllocations InventoryAllocation[]
 
   @@index([customerId, status])
   @@index([labelStatus])
@@ -661,19 +663,157 @@ model ProductListing {
   createdByAdminId   String
   createdAt          DateTime             @default(now())
   updatedAt          DateTime             @updatedAt
+  inventoryMappedAt  DateTime?
 
   category       Category    @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   soldToCustomer Customer?   @relation("ProductSoldToCustomer", fields: [soldToCustomerId], references: [id], onDelete: SetNull)
   soldOrderItem  OrderItem?  @relation("ProductSoldItem", fields: [soldOrderItemId], references: [id], onDelete: SetNull)
   createdByAdmin AdminUser   @relation("ProductCreatedBy", fields: [createdByAdminId], references: [id], onDelete: Restrict)
   items          OrderItem[] @relation("ProductListingItems")
+  inventoryBalances InventoryBalance[]
+  inventoryMovements InventoryMovement[]
+  inventoryAllocations InventoryAllocation[]
+  intakeExistingSessions ProductIntakeSession[] @relation("IntakeExisting")
+  intakeCompletedSessions ProductIntakeSession[] @relation("IntakeCompleted")
+  intakeApprovedAssets FileAsset[] @relation("IntakeApprovedMedia")
 
   @@index([status, publishedAt])
   @@index([status, availableQuantity])
   @@index([categoryId])
   @@index([rarity, status])
   @@index([discountPercentage, status])
+  @@index([imageUrls], type: Gin)
   @@index([createdByAdminId])
+}
+
+enum InventoryMovementType {
+  OPENING_BALANCE
+  STOCK_IN
+  RESERVATION
+  SALE
+  SALE_REVERSAL
+  TRANSFER_IN
+  TRANSFER_OUT
+  ADJUSTMENT_IN
+  ADJUSTMENT_OUT
+}
+
+enum InventoryAllocationStatus {
+  RESERVED
+  SHIPPED
+  REVERSED
+}
+
+model Warehouse {
+  id String @id @default(cuid())
+  code String @unique
+  name String
+  description String?
+  isActive Boolean @default(true)
+  isSystem Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  locations WarehouseLocation[]
+}
+
+model WarehouseLocation {
+  id String @id @default(cuid())
+  warehouseId String
+  parentId String?
+  code String
+  name String
+  description String?
+  type String @default("STANDARD")
+  sortOrder Int @default(0)
+  isActive Boolean @default(true)
+  isSystem Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  warehouse Warehouse @relation(fields:[warehouseId], references:[id], onDelete:Restrict)
+  parent WarehouseLocation? @relation("LocationTree",fields:[parentId],references:[id],onDelete:Restrict)
+  children WarehouseLocation[] @relation("LocationTree")
+  balances InventoryBalance[]
+  movements InventoryMovement[]
+  allocations InventoryAllocation[]
+  intakeSessions ProductIntakeSession[]
+  @@unique([warehouseId,code])
+  @@index([warehouseId,isActive,sortOrder,id])
+  @@index([parentId])
+}
+
+model InventoryBalance {
+  id String @id @default(cuid())
+  productId String
+  locationId String
+  quantityOnHand Int @default(0)
+  quantityReserved Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  product ProductListing @relation(fields:[productId],references:[id],onDelete:Restrict)
+  location WarehouseLocation @relation(fields:[locationId],references:[id],onDelete:Restrict)
+  @@unique([productId,locationId])
+  @@index([locationId,productId])
+}
+
+model InventoryOperation {
+  id String @id @default(cuid())
+  scope String
+  key String
+  kind String
+  requestHash String
+  actorType ActorType
+  actorId String?
+  reason String?
+  reference String?
+  notes String?
+  outcome Json @default("{}")
+  createdAt DateTime @default(now())
+  movements InventoryMovement[]
+  @@unique([scope,key])
+  @@index([createdAt,id])
+}
+
+model InventoryMovement {
+  id String @id @default(cuid())
+  productId String
+  locationId String
+  operationId String
+  movementType InventoryMovementType
+  quantityDelta Int
+  quantityBefore Int
+  quantityAfter Int
+  reservedDelta Int @default(0)
+  reservedBefore Int @default(0)
+  reservedAfter Int @default(0)
+  warehouseCode String
+  locationCode String
+  referenceType String?
+  referenceId String?
+  createdAt DateTime @default(now())
+  product ProductListing @relation(fields:[productId],references:[id],onDelete:Restrict)
+  location WarehouseLocation @relation(fields:[locationId],references:[id],onDelete:Restrict)
+  operation InventoryOperation @relation(fields:[operationId],references:[id],onDelete:Restrict)
+  @@index([productId,createdAt,id])
+  @@index([locationId,createdAt,id])
+  @@index([operationId])
+  @@index([referenceType,referenceId])
+}
+
+model InventoryAllocation {
+  id String @id @default(cuid())
+  productId String
+  orderItemId String
+  locationId String
+  quantity Int
+  status InventoryAllocationStatus @default(RESERVED)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  product ProductListing @relation(fields:[productId],references:[id],onDelete:Restrict)
+  orderItem OrderItem @relation(fields:[orderItemId],references:[id],onDelete:Restrict)
+  location WarehouseLocation @relation(fields:[locationId],references:[id],onDelete:Restrict)
+  @@unique([orderItemId,locationId])
+  @@index([productId,status,locationId])
+  @@index([locationId,status])
 }
 
 model Auction {
@@ -714,6 +854,7 @@ model Auction {
   @@index([status, startsAt, endsAt])
   @@index([categoryId])
   @@index([rarity, status])
+  @@index([imageUrls], type: Gin)
   @@index([createdByAdminId])
 }
 
@@ -872,6 +1013,7 @@ model Shipment {
   @@index([trackingNumber])
 }
 
+// Retired display app storage; kept for non-destructive migration history.
 model ScreenDevice {
   id             String       @id @default(cuid())
   installationId String?      @unique
@@ -888,8 +1030,10 @@ model ScreenDevice {
 
   @@index([status, isActive])
   @@index([lastSeenAt])
+  @@ignore
 }
 
+// Retired display app storage; kept for non-destructive migration history.
 model ScreenPairingChallenge {
   id                 String    @id @default(cuid())
   installationId     String
@@ -904,8 +1048,10 @@ model ScreenPairingChallenge {
 
   @@index([installationId, createdAt])
   @@index([expiresAt])
+  @@ignore
 }
 
+// Retired display app storage; kept for non-destructive migration history.
 model QuickSaleDisplayRecord {
   id                  String   @id @default(cuid())
   customerDisplayName String
@@ -914,6 +1060,7 @@ model QuickSaleDisplayRecord {
   createdAt           DateTime @default(now())
 
   @@index([createdAt])
+  @@ignore
 }
 
 model Influencer {
@@ -1133,13 +1280,333 @@ model FileAsset {
   uploadedByAdminId    String?
   uploadedByCustomerId String?
   createdAt            DateTime @default(now())
+  intakePrivate        Boolean @default(false)
+  intakeProductId      String?
+  intakeProduct        ProductListing? @relation("IntakeApprovedMedia", fields: [intakeProductId], references: [id], onDelete: Restrict)
+  intakeImages         ProductIntakeImage[]
+  enhancementCandidates ProductImageEnhancementCandidate[]
+  enhancementMasks ProductImageEnhancementCandidate[] @relation("EnhancementMask")
 
   uploadedByAdmin    AdminUser? @relation("FileUploadedByAdmin", fields: [uploadedByAdminId], references: [id], onDelete: SetNull)
   uploadedByCustomer Customer?  @relation("FileUploadedByCustomer", fields: [uploadedByCustomerId], references: [id], onDelete: SetNull)
+  variants            FileAssetVariant[]
+  imageJobs           FileAssetImageJob[]
 
   @@index([uploadedByAdminId])
   @@index([uploadedByCustomerId])
   @@index([mimeType])
+  @@index([intakeProductId])
+}
+
+enum ProductIntakeStatus {
+  DRAFT
+  COMPLETED
+  CANCELLED
+}
+enum ProductIntakeMode {
+  NEW
+  STOCK_IN
+}
+enum IntakeUploadStatus {
+  UPLOADING
+  READY
+  FAILED
+}
+model ProductIntakeSession {
+  id                     String @id @default(cuid())
+  createdById            String
+  clientDraftId          String
+  submissionOperationKey String @unique
+  status                 ProductIntakeStatus @default(DRAFT)
+  mode                   ProductIntakeMode @default(NEW)
+  revision               Int @default(0)
+  mediaRevision          Int @default(0)
+  imageDecisionRevision  Int @default(0)
+  approvedMetadata       Json @default("{}")
+  recognizedMetadata     Json?
+  quantity               Int?
+  locationId             String?
+  existingProductId      String?
+  selectedImageKey       String?
+  completedProductId     String?
+  completedAt            DateTime?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  createdBy              AdminUser @relation(fields:[createdById],references:[id],onDelete:Restrict)
+  location               WarehouseLocation? @relation(fields:[locationId],references:[id],onDelete:Restrict)
+  existingProduct        ProductListing? @relation("IntakeExisting",fields:[existingProductId],references:[id],onDelete:Restrict)
+  completedProduct       ProductListing? @relation("IntakeCompleted",fields:[completedProductId],references:[id],onDelete:Restrict)
+  images                 ProductIntakeImage[]
+  recognitionRequests    ProductRecognitionRequest[]
+  duplicateDecision      IntakeDuplicateDecision?
+  enhancementJobs        ProductImageEnhancementJob[]
+  enhancementRequests    ProductImageEnhancementRequest[]
+  imageDecisions         ProductImageEnhancementDecision[]
+  @@unique([createdById,clientDraftId])
+  @@index([createdById,status,updatedAt,id])
+  @@index([status,updatedAt,id])
+}
+model ProductIntakeImage {
+  id              String @id @default(cuid())
+  sessionId       String
+  clientImageId   String
+  requestHash     String
+  storageKey      String
+  assetId         String? @unique
+  status          IntakeUploadStatus @default(UPLOADING)
+  lastErrorCode   String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  session         ProductIntakeSession @relation(fields:[sessionId],references:[id],onDelete:Restrict)
+  asset           FileAsset? @relation(fields:[assetId],references:[id],onDelete:Restrict)
+  recognitionTasks ProductRecognitionTask[] @relation("RecognitionSource")
+  recognitionRequests ProductRecognitionRequest[]
+  enhancementJobs ProductImageEnhancementJob[]
+  enhancementDecisions ProductImageEnhancementDecision[]
+  @@unique([sessionId,clientImageId])
+  @@index([status,updatedAt,id])
+}
+
+enum RecognitionTaskStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  UNKNOWN
+}
+enum RecognitionRequestStatus {
+  ACTIVE
+  CANCELLED
+  SUPERSEDED
+}
+model ProductRecognitionTask {
+  id String @id @default(cuid())
+  cacheKey String @unique
+  sourceImageId String
+  sourceHash String
+  actorId String
+  provider String
+  model String
+  modelRevision String
+  promptVersion String
+  schemaVersion String
+  taxonomyHash String
+  categorySnapshot Json
+  status RecognitionTaskStatus @default(PENDING)
+  attempts Int @default(0)
+  leaseToken String?
+  nextDispatchAt DateTime @default(now())
+  result Json?
+  warnings Json?
+  errorCode String?
+  startedAt DateTime?
+  completedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  sourceImage ProductIntakeImage @relation("RecognitionSource",fields:[sourceImageId],references:[id],onDelete:Restrict)
+  requests ProductRecognitionRequest[]
+  usage RecognitionUsage[]
+  @@index([status,nextDispatchAt,id])
+}
+model ProductRecognitionRequest {
+  id String @id @default(cuid())
+  sessionId String
+  imageId String
+  taskId String
+  actorId String
+  requestKey String
+  generation Int @default(0)
+  sequence Int
+  status RecognitionRequestStatus @default(ACTIVE)
+  createdAt DateTime @default(now())
+  session ProductIntakeSession @relation(fields:[sessionId],references:[id],onDelete:Restrict)
+  image ProductIntakeImage @relation(fields:[imageId],references:[id],onDelete:Restrict)
+  task ProductRecognitionTask @relation(fields:[taskId],references:[id],onDelete:Restrict)
+  @@unique([sessionId,requestKey])
+  @@unique([sessionId,sequence])
+  @@index([sessionId,createdAt,id])
+  @@index([taskId,status])
+}
+model RecognitionUsage {
+  id String @id @default(cuid())
+  taskId String?
+  enhancementJobId String?
+  purpose String @default("RECOGNITION")
+  usageDetails Json?
+  actorId String
+  provider String
+  model String
+  attempt Int
+  status String @default("RESERVED")
+  reservedUsd Decimal @db.Decimal(18,9)
+  inputRateUsd Decimal @db.Decimal(18,9)
+  outputRateUsd Decimal @db.Decimal(18,9)
+  committedUsd Decimal @db.Decimal(18,9)
+  estimatedUsd Decimal? @db.Decimal(18,9)
+  actualBilledUsd Decimal? @db.Decimal(18,9)
+  inputTokens Int?
+  outputTokens Int?
+  thinkingTokens Int?
+  latencyMs Int?
+  errorCode String?
+  createdAt DateTime @default(now())
+  completedAt DateTime?
+  task ProductRecognitionTask? @relation(fields:[taskId],references:[id],onDelete:Restrict)
+  enhancementJob ProductImageEnhancementJob? @relation(fields:[enhancementJobId],references:[id],onDelete:Restrict)
+  @@unique([taskId,attempt])
+  @@unique([enhancementJobId,attempt])
+  @@index([provider,createdAt])
+  @@index([actorId,createdAt])
+  @@index([model,createdAt])
+}
+// Originals are never replaced. A job belongs to one private draft and one immutable capture.
+model ProductImageEnhancementJob {
+  id String @id @default(cuid())
+  sessionId String
+  imageId String
+  actorId String
+  identityKey String @unique
+  sourceHash String
+  mode String
+  background String
+  recipeVersion String
+  provider String
+  model String
+  modelRevision String
+  parameters Json @default("{}")
+  promptVersion String
+  generation Int @default(0)
+  status String @default("PENDING")
+  attempts Int @default(0)
+  leaseToken String?
+  nextDispatchAt DateTime @default(now())
+  providerRequestId String?
+  errorCode String?
+  metrics Json?
+  startedAt DateTime?
+  completedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  session ProductIntakeSession @relation(fields:[sessionId],references:[id],onDelete:Restrict)
+  image ProductIntakeImage @relation(fields:[imageId],references:[id],onDelete:Restrict)
+  candidate ProductImageEnhancementCandidate?
+  requests ProductImageEnhancementRequest[]
+  usage RecognitionUsage[]
+  @@index([status,nextDispatchAt,id])
+  @@index([sessionId,imageId,createdAt,id])
+}
+model ProductImageEnhancementRequest {
+  id String @id @default(cuid())
+  sessionId String
+  jobId String
+  requestKey String
+  requestHash String
+  createdAt DateTime @default(now())
+  session ProductIntakeSession @relation(fields:[sessionId],references:[id],onDelete:Restrict)
+  job ProductImageEnhancementJob @relation(fields:[jobId],references:[id],onDelete:Restrict)
+  @@unique([sessionId,requestKey])
+}
+model ProductImageEnhancementCandidate {
+  id String @id @default(cuid())
+  jobId String @unique
+  assetId String @unique
+  contentHash String
+  width Int
+  height Int
+  qualityStatus String
+  mediaRole String @default("FACTUAL")
+  warnings Json
+  processingDetails Json?
+  maskAssetId String? @unique
+  maskAsset FileAsset? @relation("EnhancementMask",fields:[maskAssetId],references:[id],onDelete:Restrict)
+  createdAt DateTime @default(now())
+  job ProductImageEnhancementJob @relation(fields:[jobId],references:[id],onDelete:Restrict)
+  asset FileAsset @relation(fields:[assetId],references:[id],onDelete:Restrict)
+  selections ProductImageEnhancementDecision[]
+}
+model ProductImageEnhancementDecision {
+  id String @id @default(cuid())
+  sessionId String
+  imageId String
+  actorId String
+  requestKey String
+  requestHash String
+  action String
+  targetCandidateId String?
+  selectedCandidateId String?
+  revision Int
+  businessRevision Int
+  createdAt DateTime @default(now())
+  session ProductIntakeSession @relation(fields:[sessionId],references:[id],onDelete:Restrict)
+  image ProductIntakeImage @relation(fields:[imageId],references:[id],onDelete:Restrict)
+  selectedCandidate ProductImageEnhancementCandidate? @relation(fields:[selectedCandidateId],references:[id],onDelete:Restrict)
+  @@unique([sessionId,requestKey])
+  @@unique([sessionId,revision])
+}
+model IntakeDuplicateDecision {
+  id String @id @default(cuid())
+  sessionId String @unique
+  revision Int
+  identityHash String
+  candidatesHash String
+  action String
+  actorId String
+  reason String
+  createdAt DateTime @default(now())
+  session ProductIntakeSession @relation(fields:[sessionId],references:[id],onDelete:Restrict)
+}
+
+enum ImageVariantType {
+  PLACEHOLDER
+  THUMBNAIL
+  CATALOG
+  DETAIL
+}
+
+enum ImageVariantFormat {
+  WEBP
+  JPEG
+}
+
+enum ImageJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model FileAssetVariant {
+  id            String             @id @default(cuid())
+  assetId       String
+  recipeVersion String
+  variantType   ImageVariantType
+  format        ImageVariantFormat
+  storageKey    String             @unique
+  width         Int
+  height        Int
+  fileSize      Int
+  contentHash   String
+  createdAt     DateTime           @default(now())
+  asset         FileAsset          @relation(fields: [assetId], references: [id], onDelete: Restrict)
+
+  @@unique([assetId, recipeVersion, variantType, format])
+}
+
+model FileAssetImageJob {
+  id             String         @id @default(cuid())
+  assetId        String
+  recipeVersion  String
+  status         ImageJobStatus @default(PENDING)
+  attempts       Int            @default(0)
+  sourceHash     String?
+  errorCode      String?
+  nextDispatchAt DateTime       @default(now())
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  asset          FileAsset      @relation(fields: [assetId], references: [id], onDelete: Restrict)
+
+  @@unique([assetId, recipeVersion])
+  @@index([recipeVersion, status, nextDispatchAt, id])
 }
 
 model IdempotencyKey {

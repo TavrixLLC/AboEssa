@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { AdminAuthService } from 'src/admin-auth/admin-auth.service';
@@ -14,12 +14,10 @@ import { AuthenticatedUser } from 'src/common/types/authenticated-user.interface
 import { AllowMandatoryPasswordChange } from 'src/common/decorators/mandatory-password-change.decorator';
 import { ChangePasswordDto } from 'src/admin-auth/dto/change-password.dto';
 import { StaffService } from 'src/admin-users/staff.service';
-import { Permissions } from 'src/common/decorators/permissions.decorator';
-import { PermissionsGuard } from 'src/common/guards/permissions.guard';
-import { PERMISSIONS } from 'src/common/constants/permissions.constants';
 
 @ApiTags('Admin auth')
 @Controller('admin/auth')
+@UseGuards(ThrottlerGuard)
 export class AdminAuthController {
   constructor(private readonly adminAuthService: AdminAuthService, private readonly staffService: StaffService) {}
 

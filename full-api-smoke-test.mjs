@@ -72,7 +72,6 @@ const state = {
     referralCode: null,
     ad: null,
     shippingRequest: null,
-    screen: null,
 };
 
 const results = [];
@@ -122,7 +121,6 @@ function tokenOf(obj) {
         d.jwt ||
         d.adminToken ||
         d.customerToken ||
-        d.screenToken ||
         d.tokens?.accessToken ||
         d.auth?.accessToken ||
         obj.accessToken ||
@@ -742,20 +740,6 @@ async function main() {
         assert(res.ok, "Warehouse barcode search failed", res.body);
     });
 
-    await step("Create screen and validate screen token", async () => {
-        const create = await admin("POST", "/api/admin/screens", {
-            body: { name: `Smoke Screen ${RUN_ID}` },
-            expectStatus: [200, 201],
-        });
-        state.screen = safeData(create);
-        const screenToken = tokenOf(create.body) || state.screen.screenToken || state.screen.token;
-        if (!screenToken) throw new Error("Screen created but no screen token found in response");
-
-        const me = await request("GET", "/api/screens/me", { token: screenToken });
-        assert(me.ok, "Screen /me failed", me.body);
-        state.screen.token = screenToken;
-    });
-
     if (RUN_SECURITY) {
         await step("Security: customer token cannot access admin customers", async () => {
             const res = await request("GET", "/api/admin/customers", {
@@ -770,15 +754,6 @@ async function main() {
                 allowFail: true,
             });
             assert([401, 403].includes(res.status), "Expected 401/403 without token", res.body);
-        });
-
-        await step("Security: screen token cannot access admin endpoints", async () => {
-            if (!state.screen?.token) throw new Error("No screen token available; skipping");
-            const res = await request("GET", "/api/admin/customers", {
-                token: state.screen.token,
-                allowFail: true,
-            });
-            assert([401, 403].includes(res.status), "Expected 401/403 for screen token on admin endpoint", res.body);
         });
     }
 

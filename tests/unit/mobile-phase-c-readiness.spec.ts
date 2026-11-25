@@ -195,6 +195,7 @@ describe('ProductsService mobile contract', () => {
       labelPayloads: [],
     };
     const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
       productListing: {
         findUnique: jest
           .fn()
@@ -277,7 +278,9 @@ describe('ProductsService mobile contract', () => {
       notifications as any,
       checkout as any,
     );
-    return { service, sockets, prisma, checkout };
+    // Writes now happen on the same locked transaction delegate.
+    tx.productListing.update = prisma.productListing.update as any;
+    return { service, sockets, prisma, checkout, tx };
   }
 
   it('maps products to stable mobile-safe fields', () => {
@@ -511,9 +514,8 @@ describe('ProductsService mobile contract', () => {
   });
 
   it('admin product update cannot lower quantity below sold count', async () => {
-    const { service } = makeService();
-    const prisma = (service as any).prisma;
-    prisma.productListing.findUniqueOrThrow.mockResolvedValue(
+    const { service, tx } = makeService();
+    tx.productListing.findUnique.mockResolvedValue(
       product({ totalQuantity: 3, availableQuantity: 1, soldQuantity: 2 }),
     );
 
@@ -1109,7 +1111,14 @@ describe('Notifications, uploads, and realtime contracts', () => {
       prisma as any,
       storage,
     );
-    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+    const png = await (
+      await import('sharp')
+    )
+      .default({
+        create: { width: 1, height: 1, channels: 3, background: '#ffffff' },
+      })
+      .png()
+      .toBuffer();
 
     const result = await service.uploadImage(
       { originalname: 'test.png', mimetype: 'image/png', size: png.length, buffer: png },

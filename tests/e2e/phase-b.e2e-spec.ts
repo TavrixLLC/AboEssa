@@ -77,8 +77,8 @@ describe('Phase B route smoke (e2e)', () => {
     await app.close();
   });
 
-  it('creates a quick sale through HTTP', async () => {
-    const response = await request(app.getHttpServer())
+  it('keeps retired quick-sale creation unavailable through HTTP', async () => {
+    await request(app.getHttpServer())
       .post('/api/admin/sales/quick')
       .set('Idempotency-Key', 'idem-1')
       .send({
@@ -88,14 +88,15 @@ describe('Phase B route smoke (e2e)', () => {
         source: SaleSource.TIKTOK_LIVE_MANUAL,
         printNow: true,
       })
-      .expect(201);
+      .expect(404);
 
-    expect(response.body.success).toBe(true);
-    expect(response.body.data.items[0].barcode).toBe('ITEM-20260713-A8K2M9');
+    expect(salesService.quickSale).not.toHaveBeenCalled();
   });
 
   it('lists warehouse pending labels through HTTP', async () => {
-    const response = await request(app.getHttpServer()).get('/api/admin/warehouse/label-pending').expect(200);
+    const response = await request(app.getHttpServer())
+      .get('/api/admin/warehouse/label-pending')
+      .expect(200);
 
     expect(response.body.success).toBe(true);
     expect(response.body.data.items[0].labelStatus).toBe('PENDING');

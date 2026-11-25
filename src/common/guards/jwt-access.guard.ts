@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
-import { ActorType, AdminRole, CustomerStatus, ScreenStatus } from '@prisma/client';
+import { ActorType, AdminRole, CustomerStatus } from '@prisma/client';
 import { Request } from 'express';
 import { IS_PUBLIC_KEY } from 'src/common/decorators/public.decorator';
 import { ALLOW_MANDATORY_PASSWORD_CHANGE } from 'src/common/decorators/mandatory-password-change.decorator';
@@ -17,7 +17,6 @@ import { AppException } from 'src/common/exceptions/app.exception';
 import { AuthenticatedUser, JwtAccessPayload } from 'src/common/types/authenticated-user.interface';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { PermissionResolverService } from 'src/permissions/permission-resolver.service';
-import { PasswordService } from 'src/common/security/password.service';
 
 @Injectable()
 export class JwtAccessGuard implements CanActivate {
@@ -26,7 +25,6 @@ export class JwtAccessGuard implements CanActivate {
     private readonly jwtService: JwtService,
     private readonly prisma: PrismaService,
     private readonly permissionResolver: PermissionResolverService,
-    private readonly passwordService: PasswordService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -55,7 +53,7 @@ export class JwtAccessGuard implements CanActivate {
       );
     }
 
-    request.user = await this.resolveUser(payload, token);
+    request.user = await this.resolveUser(payload);
     if (
       request.user.type === TokenType.Admin &&
       request.user.mustChangePassword &&
@@ -113,13 +111,10 @@ export class JwtAccessGuard implements CanActivate {
     if (type === TokenType.Customer) {
       return process.env.JWT_CUSTOMER_ACCESS_SECRET;
     }
-    if (type === TokenType.Screen) {
-      return process.env.JWT_SCREEN_ACCESS_SECRET;
-    }
     return undefined;
   }
 
-  private async resolveUser(payload: JwtAccessPayload, token: string): Promise<AuthenticatedUser> {
+  private async resolveUser(payload: JwtAccessPayload): Promise<AuthenticatedUser> {
     if (payload.type === TokenType.Admin) {
       const admin = await this.prisma.adminUser.findUnique({ where: { id: payload.sub } });
       if (!admin || !admin.isActive || admin.status !== 'ACTIVE') {
@@ -182,26 +177,6 @@ export class JwtAccessGuard implements CanActivate {
       };
     }
 
-    const screen = await this.prisma.screenDevice.findUnique({ where: { id: payload.sub } });
-    if (
-      !screen ||
-      !screen.isActive ||
-      screen.status !== ScreenStatus.ACTIVE ||
-      payload.tokenVersion !== screen.tokenVersion ||
-      screen.tokenHash === 'pending-pairing-delivery' ||
-      !(await this.passwordService.verify(screen.tokenHash, token))
-    ) {
-      throw new UnauthorizedException({
-        message: 'Screen token has been revoked',
-        code: 'SCREEN_REVOKED',
-      });
-    }
-
-    return {
-      id: screen.id,
-      type: TokenType.Screen,
-      actorType: ActorType.SCREEN,
-      tokenVersion: screen.tokenVersion,
-    };
+    throw new UnauthorizedException({ message: 'Invalid token type', code: 'INVALID_TOKEN_TYPE' });
   }
 }
